@@ -1,0 +1,15 @@
+# Object files
+*.o
+
+# Backups
+*~
+
+# Mac OS X metadata
+*.DS_Store
+
+#The rest
+build/
+DerivedData/
+*.xcuserdata/
+xcuserdata/
+*.xcuserstate
