@@ -1073,6 +1073,7 @@
 				0856CCBF14A99E1C000B1711 /* Frameworks */,
 				082AC26A14AA5A5A00071F5E /* Run lowmem */,
 				08CD3F3214B665E1009CA2A2 /* Preprocess Info.plist */,
+				1618630A300D4FF10085285F /* Run Script */,
 			);
 			buildRules = (
 			);
@@ -1313,6 +1314,24 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "sed -i '' 's/@PACKAGE_VERSION@/2.4/g' \"${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}\"\n";
+		};
+		1618630A300D4FF10085285F /* Run Script */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Run Script";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Bundle SDL dylibs\nset -eu\n\nAPP=\"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\nFW=\"${APP}/Contents/Frameworks\"\nEXE=\"${APP}/Contents/MacOS/${EXECUTABLE_NAME}\"\n\nmkdir -p \"$FW\"\n\nSDL12=\"/opt/homebrew/opt/sdl12-compat/lib/libSDL-1.2.0.dylib\"\nSDL2=\"/opt/homebrew/opt/sdl2-compat/lib/libSDL2-2.0.0.dylib\"\nSDL3=\"/opt/homebrew/opt/sdl3/lib/libSDL3.0.dylib\"\n\ncp -f \"$SDL12\" \"$FW/\"\ncp -f \"$SDL2\" \"$FW/\"\ncp -f \"$SDL3\" \"$FW/\"\n\nln -sf libSDL-1.2.0.dylib \"$FW/libSDL.dylib\"\nln -sf libSDL2-2.0.0.dylib \"$FW/libSDL2.dylib\"\nln -sf libSDL2-2.0.0.dylib \"$FW/libSDL2-2.0.dylib\"\nln -sf libSDL3.0.dylib \"$FW/libSDL3.dylib\"\n\ninstall_name_tool -change \"$SDL12\" \"@executable_path/../Frameworks/libSDL-1.2.0.dylib\" \"$EXE\"\ninstall_name_tool -id \"@loader_path/libSDL-1.2.0.dylib\" \"$FW/libSDL-1.2.0.dylib\"\ninstall_name_tool -id \"@loader_path/libSDL2-2.0.0.dylib\" \"$FW/libSDL2-2.0.0.dylib\"\ninstall_name_tool -id \"@loader_path/libSDL3.0.dylib\" \"$FW/libSDL3.0.dylib\"\n\nSIGN_IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-}\"\nif [ -z \"$SIGN_IDENTITY\" ]; then\n  SIGN_IDENTITY=\"${CODE_SIGN_IDENTITY:--}\"\nfi\nif [ -z \"$SIGN_IDENTITY\" ]; then\n  SIGN_IDENTITY=\"-\"\nfi\n\ncodesign --force --sign \"$SIGN_IDENTITY\" \"$FW/libSDL3.0.dylib\"\ncodesign --force --sign \"$SIGN_IDENTITY\" \"$FW/libSDL2-2.0.0.dylib\"\ncodesign --force --sign \"$SIGN_IDENTITY\" \"$FW/libSDL-1.2.0.dylib\"\ncodesign --force --sign \"$SIGN_IDENTITY\" \"$APP\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1773,10 +1792,11 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING = NO;
-				ARCHS = "$(ARCHS_STANDARD)";
+				ARCHS = arm64;
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
+				EXCLUDED_ARCHS = x86_64;
 				FRAMEWORK_SEARCH_PATHS = /Library/Frameworks;
 				GCC_CW_ASM_SYNTAX = NO;
 				GCC_DYNAMIC_NO_PIC = NO;
@@ -1853,11 +1873,12 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING = NO;
-				ARCHS = "$(ARCHS_STANDARD)";
+				ARCHS = arm64;
 				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				EXCLUDED_ARCHS = x86_64;
 				FRAMEWORK_SEARCH_PATHS = /Library/Frameworks;
 				GCC_AUTO_VECTORIZATION = YES;
 				GCC_CW_ASM_SYNTAX = NO;
@@ -1898,7 +1919,7 @@
 					/opt/homebrew/include/SDL2,
 					/opt/homebrew/include,
 				);
-				INFOPLIST_EXPAND_BUILD_SETTINGS = NO;
+				INFOPLIST_EXPAND_BUILD_SETTINGS = YES;
 				INFOPLIST_FILE = Info.plist.in;
 				INFOPLIST_PREFIX_HEADER = "";
 				INFOPLIST_PREPROCESS = NO;

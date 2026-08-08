@@ -228,7 +228,6 @@ static void *vm_acquire_framebuffer(uint32 size)
 		void *fb = Mac2HostAddr(framebuffer_guest_base);
 		vm_protect(fb, framebuffer_guest_size, VM_PAGE_DEFAULT);
 		Mac_memset(framebuffer_guest_base, 0, framebuffer_guest_size);
-		fprintf(stderr, "SheepShaver video: framebuffer guest=0x%08x host=%p size=0x%08x\n", framebuffer_guest_base, fb, framebuffer_guest_size);
 		return fb;
 	}
 
@@ -690,8 +689,9 @@ void driver_base::set_video_mode(int flags)
 {
 	int depth = sdl_depth_of_video_depth(VIDEO_MODE_DEPTH);
 	if ((s = SDL_SetVideoMode(VIDEO_MODE_X, VIDEO_MODE_Y, depth,
-			SDL_HWSURFACE | flags)) == NULL)
+			SDL_HWSURFACE | flags)) == NULL) {
 		return;
+	}
 #ifdef ENABLE_VOSF
 	the_host_buffer = (uint8 *)s->pixels;
 #endif
@@ -1259,6 +1259,7 @@ void VideoExit(void)
 		SDL_DestroyMutex(sdl_palette_lock);
 	if (sdl_events_lock)
 		SDL_DestroyMutex(sdl_events_lock);
+
 }
 
 
@@ -1334,8 +1335,9 @@ static void do_toggle_fullscreen(void)
 void VideoVBL(void)
 {
 	// Emergency quit requested? Then quit
-	if (emerg_quit)
+	if (emerg_quit) {
 		QuitEmulator();
+	}
 
 	if (toggle_fullscreen)
 		do_toggle_fullscreen();
@@ -1349,8 +1351,10 @@ void VideoVBL(void)
 
 	// Temporarily give up frame buffer lock (this is the point where
 	// we are suspended when the user presses Ctrl-Tab)
+#if !EMULATED_PPC
 	UNLOCK_FRAME_BUFFER;
 	LOCK_FRAME_BUFFER;
+#endif
 
 	// Execute video VBL
 	if (private_data != NULL && private_data->interruptsEnabled)
@@ -1363,8 +1367,9 @@ void VideoInterrupt(void)
 	SDL_PumpEvents();
 
 	// Emergency quit requested? Then quit
-	if (emerg_quit)
+	if (emerg_quit) {
 		QuitEmulator();
+	}
 
 	if (toggle_fullscreen)
 		do_toggle_fullscreen();
@@ -1887,9 +1892,9 @@ static void handle_events(void)
 				force_complete_window_refresh();
 				break;
 
-			// Window "close" widget clicked
-			case SDL_QUIT:
-				ADBKeyDown(0x7f);	// Power key
+		// Window "close" widget clicked
+		case SDL_QUIT:
+			ADBKeyDown(0x7f);	// Power key
 				ADBKeyUp(0x7f);
 				break;
 

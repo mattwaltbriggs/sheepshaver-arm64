@@ -98,10 +98,9 @@ void sbappend(struct socket *so, struct mbuf *m)
 	 * ottherwise it'll arrive out of order, and hence corrupt
 	 */
 	if (sbappend_log_count < 32) {
-		printf("SheepShaver slirp: sbappend fd=%d len=%zu buffered=%u state=0x%x before direct-send=%d\n",
+		slirp_trace("sbappend fd=%d len=%zu buffered=%u state=0x%x before direct-send=%d",
 			so->s, m->m_len, so->so_rcv.sb_cc, so->so_state,
 			!so->so_rcv.sb_cc);
-		fflush(stdout);
 	}
 
 	if (!so->so_rcv.sb_cc) {
@@ -111,9 +110,8 @@ void sbappend(struct socket *so, struct mbuf *m)
 	}
 
 	if (sbappend_log_count < 32) {
-		printf("SheepShaver slirp: sbappend fd=%d send ret=%d errno=%d len=%zu buffered=%u\n",
+		slirp_trace("sbappend fd=%d send ret=%d errno=%d len=%zu buffered=%u",
 			so->s, ret, error, m->m_len, so->so_rcv.sb_cc);
-		fflush(stdout);
 		sbappend_log_count++;
 	}
 		

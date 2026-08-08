@@ -20,6 +20,8 @@
 	<string>@PACKAGE_VERSION@</string>
 	<key>CFBundleIconFile</key>
 	<string>SheepShaver.icns</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.5</string>
 		<key>CSResourcesFileMapped</key>
 		<true/>
 		<key>LSEnvironment</key>

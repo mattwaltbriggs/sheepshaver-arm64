@@ -221,23 +221,21 @@ ip_input(m)
 				if (ip_tcp_log_count < 8) {
 				uint32 src = ntohl(ip->ip_src.s_addr);
 				uint32 dst = ntohl(ip->ip_dst.s_addr);
-				printf("SheepShaver slirp: ip_input -> tcp len=%u hlen=%u %u.%u.%u.%u -> %u.%u.%u.%u\n",
-					ip->ip_len, hlen,
-					(src >> 24) & 0xff, (src >> 16) & 0xff, (src >> 8) & 0xff, src & 0xff,
-					(dst >> 24) & 0xff, (dst >> 16) & 0xff, (dst >> 8) & 0xff, dst & 0xff);
-				fflush(stdout);
-				ip_tcp_log_count++;
+					slirp_trace("ip_input -> tcp len=%u hlen=%u %u.%u.%u.%u -> %u.%u.%u.%u",
+						ip->ip_len, hlen,
+						(src >> 24) & 0xff, (src >> 16) & 0xff, (src >> 8) & 0xff, src & 0xff,
+						(dst >> 24) & 0xff, (dst >> 16) & 0xff, (dst >> 8) & 0xff, dst & 0xff);
+					ip_tcp_log_count++;
+				}
 			}
-		}
 		tcp_input(m, hlen, (struct socket *)NULL);
 		{
 			static int ip_tcp_return_log_count = 0;
 				if (ip_tcp_return_log_count < 8) {
-				printf("SheepShaver slirp: ip_input <- tcp\n");
-				fflush(stdout);
-				ip_tcp_return_log_count++;
+					slirp_trace("ip_input <- tcp");
+					ip_tcp_return_log_count++;
+				}
 			}
-		}
 		break;
 	 case IPPROTO_UDP:
 		udp_input(m, hlen);

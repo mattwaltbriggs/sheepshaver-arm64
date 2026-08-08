@@ -78,7 +78,7 @@ powerpc_block_info::init(uintptr start_pc)
 inline bool
 powerpc_block_info::intersect(uintptr start, uintptr end)
 {
-	return (min_pc >= start && min_pc < end) || (max_pc >= start && max_pc < end);
+	return min_pc < end && max_pc >= start;
 }
 
 #endif /* PPC_BLOCKINFO_H */

@@ -259,12 +259,14 @@ static NSString *getEthernetInterfaceFromPrefs()
 static NSString *makeRelativeIfNecessary(NSString *path)
 {
   char cwd[1024], filename[1024];
-  int cwdlen;
+  size_t cwdlen;
   strlcpy(filename, [path fileSystemRepresentation], sizeof(filename));
-  getcwd(cwd, sizeof(cwd));
+  if (getcwd(cwd, sizeof(cwd)) == NULL)
+    return path;
   cwdlen = strlen(cwd);
-  if (!strncmp(cwd, filename, cwdlen)) {
-    if (cwdlen >= 0 && cwd[cwdlen-1] != '/')
+  if (cwdlen > 1 && !strncmp(cwd, filename, cwdlen) &&
+      (filename[cwdlen] == '\0' || filename[cwdlen] == '/')) {
+    if (filename[cwdlen] == '/')
       cwdlen++;
     return [NSString stringWithUTF8String: filename + cwdlen];
   }
@@ -509,4 +511,3 @@ static NSString *makeRelativeIfNecessary(NSString *path)
 }
 
 @end
-

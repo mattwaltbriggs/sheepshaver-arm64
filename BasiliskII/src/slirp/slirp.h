@@ -217,6 +217,9 @@ int inet_aton(const char *cp, struct in_addr *ia);
 
 #include "debug.h"
 
+int slirp_debug_enabled(void);
+void slirp_trace(const char *fmt, ...);
+
 #if defined __GNUC__
 #define PACKED__ __attribute__ ((packed))
 #elif defined _MSC_VER 
@@ -332,6 +335,7 @@ int ip_output(struct socket *, struct mbuf *);
 
 /* tcp_input.c */
 int tcp_reass(register struct tcpcb *, register struct tcpiphdr *, struct mbuf *);
+void tcp_reass_flush(struct tcpcb *);
 void tcp_input(register struct mbuf *, int, struct socket *);
 void tcp_dooptions(struct tcpcb *, u_char *, int, struct tcpiphdr *);
 void tcp_xmit_timer(register struct tcpcb *, int);

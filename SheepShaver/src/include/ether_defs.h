@@ -290,7 +290,7 @@ struct nw_memory_helper<4> {
 	static inline void  store(void *ptr, uint32 val) { *((uint32 *)ptr) = htonl(val); }
 };
 
-// Scalar data member wrapper (specialise for pointer member types?)
+// Scalar data member wrapper
 template< class type, class public_type >
 class nw_scalar_member_helper {
 	uint8 _pad[sizeof(type)];
@@ -319,6 +319,34 @@ public:
 	}
 	nw_scalar_member_helper<type, public_type> & operator |= (int val) {
 		*this = *this | val;
+		return *this;
+	}
+};
+
+// Pointer data member wrapper. MacOS stores 32-bit guest addresses in
+// STREAMS structures, while the host driver code dereferences host pointers.
+template< class type, class pointee_type >
+class nw_scalar_member_helper<type, pointee_type *> {
+	uint8 _pad[sizeof(type)];
+public:
+	operator pointee_type * () const {
+		uint32 addr = (uint32)nw_memory_helper<sizeof(type)>::load((void *)this);
+		return addr ? (pointee_type *)Mac2HostAddr(addr) : NULL;
+	}
+	pointee_type * operator -> () const {
+		return this->operator pointee_type * ();
+	}
+	nw_scalar_member_helper<type, pointee_type *> & operator = (pointee_type *val) {
+		uint32 addr = val ? Host2MacAddr((uint8 *)val) : 0;
+		nw_memory_helper<sizeof(type)>::store((void *)this, (type)addr);
+		return *this;
+	}
+	nw_scalar_member_helper<type, pointee_type *> & operator += (int val) {
+		*this = (pointee_type *)((uint8 *)this->operator pointee_type * () + val);
+		return *this;
+	}
+	nw_scalar_member_helper<type, pointee_type *> & operator -= (int val) {
+		*this = (pointee_type *)((uint8 *)this->operator pointee_type * () - val);
 		return *this;
 	}
 };

@@ -163,31 +163,31 @@ static void generate_powerpc_thunks(void)
 	assert(xlm_index != -1 && check_load_invoc_index != -1);
 
 	// GetResource()
-	get_resource_func = base = SheepMem::Reserve(get_resource_template_size);
+	get_resource_func = base = SheepMem::ReserveProc(get_resource_template_size);
 	Host2Mac_memcpy(base, get_resource_template, get_resource_template_size);
 	WriteMacInt32(base + xlm_index * 4, 0x80000000 | XLM_GET_RESOURCE);
 	WriteMacInt32(base + check_load_invoc_index * 4, check_load_invoc_opcode);
 
 	// Get1Resource()
-	get_1_resource_func = base = SheepMem::Reserve(get_resource_template_size);
+	get_1_resource_func = base = SheepMem::ReserveProc(get_resource_template_size);
 	Host2Mac_memcpy(base, get_resource_template, get_resource_template_size);
 	WriteMacInt32(base + xlm_index * 4, 0x80000000 | XLM_GET_1_RESOURCE);
 	WriteMacInt32(base + check_load_invoc_index * 4, check_load_invoc_opcode);
 
 	// GetIndResource()
-	get_ind_resource_func = base = SheepMem::Reserve(get_resource_template_size);
+	get_ind_resource_func = base = SheepMem::ReserveProc(get_resource_template_size);
 	Host2Mac_memcpy(base, get_resource_template, get_resource_template_size);
 	WriteMacInt32(base + xlm_index * 4, 0x80000000 | XLM_GET_IND_RESOURCE);
 	WriteMacInt32(base + check_load_invoc_index * 4, check_load_invoc_opcode);
 
 	// Get1IndResource()
-	get_1_ind_resource_func = base = SheepMem::Reserve(get_resource_template_size);
+	get_1_ind_resource_func = base = SheepMem::ReserveProc(get_resource_template_size);
 	Host2Mac_memcpy(base, get_resource_template, get_resource_template_size);
 	WriteMacInt32(base + xlm_index * 4, 0x80000000 | XLM_GET_1_IND_RESOURCE);
 	WriteMacInt32(base + check_load_invoc_index * 4, check_load_invoc_opcode);
 
 	// RGetResource()
-	r_get_resource_func = base = SheepMem::Reserve(get_resource_template_size);
+	r_get_resource_func = base = SheepMem::ReserveProc(get_resource_template_size);
 	Host2Mac_memcpy(base, get_resource_template, get_resource_template_size);
 	WriteMacInt32(base + xlm_index * 4, 0x80000000 | XLM_R_GET_RESOURCE);
 	WriteMacInt32(base + check_load_invoc_index * 4, check_load_invoc_opcode);
@@ -234,13 +234,13 @@ static void generate_powerpc_thunks(void)
 	assert(xlm_index != -1 && check_load_invoc_index != -1);
 
 	// GetNamedResource()
-	get_named_resource_func = base = SheepMem::Reserve(get_named_resource_template_size);
+	get_named_resource_func = base = SheepMem::ReserveProc(get_named_resource_template_size);
 	Host2Mac_memcpy(base, get_named_resource_template, get_named_resource_template_size);
 	WriteMacInt32(base + xlm_index * 4, 0x80000000 | XLM_GET_NAMED_RESOURCE);
 	WriteMacInt32(base + check_load_invoc_index * 4, check_load_invoc_opcode);
 
 	// Get1NamedResource()
-	get_1_named_resource_func = base = SheepMem::Reserve(get_named_resource_template_size);
+	get_1_named_resource_func = base = SheepMem::ReserveProc(get_named_resource_template_size);
 	Host2Mac_memcpy(base, get_named_resource_template, get_named_resource_template_size);
 	WriteMacInt32(base + xlm_index * 4, 0x80000000 | XLM_GET_1_NAMED_RESOURCE);
 	WriteMacInt32(base + check_load_invoc_index * 4, check_load_invoc_opcode);
@@ -263,7 +263,7 @@ bool ThunksInit(void)
 {
 #if EMULATED_PPC
 	for (int i = 0; i < NATIVE_OP_MAX; i++) {
-		uint32 base = SheepMem::Reserve(16);
+		uint32 base = SheepMem::ReserveProc(16);
 		WriteMacInt32(base + 0, base + 8);
 		WriteMacInt32(base + 4, 0); // Fake TVECT
 		WriteMacInt32(base + 8, NativeOpcode(i));

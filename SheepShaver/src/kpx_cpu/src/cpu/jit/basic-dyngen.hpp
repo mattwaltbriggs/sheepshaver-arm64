@@ -75,7 +75,11 @@ class basic_dyngen
 	// Generic code generators
 #	define DEFINE_CST(NAME,VALUE) static const unsigned long NAME = VALUE;
 #	define DEFINE_GEN(NAME,RET,ARGS) RET NAME ARGS;
+#if defined(__APPLE__) && __has_include("../../../../Unix/dyngen_precompiled/basic-dyngen-ops.hpp")
+#	include "../../../../Unix/dyngen_precompiled/basic-dyngen-ops.hpp"
+#else
 #	include "basic-dyngen-ops.hpp"
+#endif
 
 public:
 

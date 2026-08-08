@@ -26,6 +26,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sysdeps.h"
@@ -33,19 +34,46 @@
 #include "ether.h"
 #include "ether_defs.h"
 #include "macos_util.h"
+#include "thunks.h"
 
 #define DEBUG 0
 #include "debug.h"
 
+static bool ether_core_trace_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0) {
+		const char *value = getenv("SHEEPSHAVER_NET_TRACE");
+		enabled = value && value[0] && !(value[0] == '0' && value[1] == '\0');
+	}
+
+	return enabled != 0;
+}
+
 static void ether_core_trace(const char *fmt, ...)
 {
 	va_list args;
+
+	if (!ether_core_trace_enabled())
+		return;
+
 	va_start(args, fmt);
 	printf("SheepShaver ether-core: ");
 	vprintf(fmt, args);
 	printf("\n");
 	fflush(stdout);
 	va_end(args);
+}
+
+static inline uint32 ether_host_to_mac_arg(const void *ptr)
+{
+	return ptr ? Host2MacAddr((uint8 *)ptr) : 0;
+}
+
+static inline void *ether_mac_to_host_arg(uint32 addr)
+{
+	return addr ? Mac2HostAddr(addr) : NULL;
 }
 
 // Packet types
@@ -146,11 +174,6 @@ struct DLPIStream {
 	nw_multicast_node_p multicast_list;		// List of enabled multicast addresses
 };
 
-// Hack to make DLPIStream list initialization early to NULL (do we really need this?)
-struct DLPIStreamInit {
-	DLPIStreamInit(nw_DLPIStream_p *dlpi_stream_p) { *dlpi_stream_p = NULL; }
-};
-
 // Stream flags
 enum {
 	kSnapStream				= 0x00000001,
@@ -160,8 +183,32 @@ enum {
 };
 
 // List of opened streams (used internally by OpenTransport)
-static nw_DLPIStream_p dlpi_stream_list;
-static DLPIStreamInit dlpi_stream_init(&dlpi_stream_list);
+static uint32 dlpi_stream_list_addr = 0;
+
+static bool ensure_dlpi_stream_list(void)
+{
+	if (dlpi_stream_list_addr == 0)
+		dlpi_stream_list_addr = SheepMem::ReserveProc(4);
+	if (dlpi_stream_list_addr == 0)
+		return false;
+	return true;
+}
+
+static DLPIStream **dlpi_stream_list_ref(void)
+{
+	return ensure_dlpi_stream_list() ? (DLPIStream **)Mac2HostAddr(dlpi_stream_list_addr) : NULL;
+}
+
+static DLPIStream *get_dlpi_stream_list(void)
+{
+	return ensure_dlpi_stream_list() ? (DLPIStream *)ether_mac_to_host_arg(ReadMacInt32(dlpi_stream_list_addr)) : NULL;
+}
+
+static void set_dlpi_stream_list(DLPIStream *stream)
+{
+	if (ensure_dlpi_stream_list())
+		WriteMacInt32(dlpi_stream_list_addr, ether_host_to_mac_arg(stream));
+}
 
 // Are we open?
 bool ether_driver_opened = false;
@@ -198,79 +245,79 @@ typedef mblk_t *(*allocb_ptr)(size_t size, int pri);
 static uint32 allocb_tvect = 0;
 mblk_t *allocb(size_t arg1, int arg2)
 {
-	return (mblk_t *)Mac2HostAddr((uint32)CallMacOS2(allocb_ptr, allocb_tvect, arg1, arg2));
+	return (mblk_t *)ether_mac_to_host_arg((uint32)CallMacOS2(allocb_ptr, allocb_tvect, arg1, arg2));
 }
 typedef void (*freeb_ptr)(mblk_t *);
 static uint32 freeb_tvect = 0;
 static inline void freeb(mblk_t *arg1)
 {
-	CallMacOS1(freeb_ptr, freeb_tvect, arg1);
+	CallMacOS1(freeb_ptr, freeb_tvect, ether_host_to_mac_arg(arg1));
 }
 typedef int16 (*freemsg_ptr)(mblk_t *);
 static uint32 freemsg_tvect = 0;
 static inline int16 freemsg(mblk_t *arg1)
 {
-	return (int16)CallMacOS1(freemsg_ptr, freemsg_tvect, arg1);
+	return (int16)CallMacOS1(freemsg_ptr, freemsg_tvect, ether_host_to_mac_arg(arg1));
 }
 typedef mblk_t *(*copyb_ptr)(mblk_t *);
 static uint32 copyb_tvect = 0;
 static inline mblk_t *copyb(mblk_t *arg1)
 {
-	return (mblk_t *)Mac2HostAddr((uint32)CallMacOS1(copyb_ptr, copyb_tvect, arg1));
+	return (mblk_t *)ether_mac_to_host_arg((uint32)CallMacOS1(copyb_ptr, copyb_tvect, ether_host_to_mac_arg(arg1)));
 }
 typedef mblk_t *(*dupmsg_ptr)(mblk_t *);
 static uint32 dupmsg_tvect = 0;
 static inline mblk_t *dupmsg(mblk_t *arg1)
 {
-	return (mblk_t *)Mac2HostAddr((uint32)CallMacOS1(dupmsg_ptr, dupmsg_tvect, arg1));
+	return (mblk_t *)ether_mac_to_host_arg((uint32)CallMacOS1(dupmsg_ptr, dupmsg_tvect, ether_host_to_mac_arg(arg1)));
 }
 typedef mblk_t *(*getq_ptr)(queue_t *);
 static uint32 getq_tvect = 0;
 static inline mblk_t *getq(queue_t *arg1)
 {
-	return (mblk_t *)Mac2HostAddr((uint32)CallMacOS1(getq_ptr, getq_tvect, arg1));
+	return (mblk_t *)ether_mac_to_host_arg((uint32)CallMacOS1(getq_ptr, getq_tvect, ether_host_to_mac_arg(arg1)));
 }
 typedef int (*putq_ptr)(queue_t *, mblk_t *);
 static uint32 putq_tvect = 0;
 static inline int putq(queue_t *arg1, mblk_t *arg2)
 {
-	return (int)CallMacOS2(putq_ptr, putq_tvect, arg1, arg2);
+	return (int)CallMacOS2(putq_ptr, putq_tvect, ether_host_to_mac_arg(arg1), ether_host_to_mac_arg(arg2));
 }
 typedef int (*putnext_ptr)(queue_t *,  mblk_t *);
 static uint32 putnext_tvect = 0;
 static inline int putnext(queue_t *arg1, mblk_t *arg2)
 {
-	return (int)CallMacOS2(putnext_ptr, putnext_tvect, arg1, arg2);
+	return (int)CallMacOS2(putnext_ptr, putnext_tvect, ether_host_to_mac_arg(arg1), ether_host_to_mac_arg(arg2));
 }
 typedef int (*putnextctl1_ptr)(queue_t *, int type, int c);
 static uint32 putnextctl1_tvect = 0;
 static inline int putnextctl1(queue_t *arg1, int arg2, int arg3)
 {
-	return (int)CallMacOS3(putnextctl1_ptr, putnextctl1_tvect, arg1, arg2, arg3);
+	return (int)CallMacOS3(putnextctl1_ptr, putnextctl1_tvect, ether_host_to_mac_arg(arg1), arg2, arg3);
 }
 typedef int (*canputnext_ptr)(queue_t *);
 static uint32 canputnext_tvect = 0;
 static inline int canputnext(queue_t *arg1)
 {
-	return (int)CallMacOS1(canputnext_ptr, canputnext_tvect, arg1);
+	return (int)CallMacOS1(canputnext_ptr, canputnext_tvect, ether_host_to_mac_arg(arg1));
 }
 typedef int (*qreply_ptr)(queue_t *, mblk_t *);
 static uint32 qreply_tvect = 0;
 static inline int qreply(queue_t *arg1, mblk_t *arg2)
 {
-	return (int)CallMacOS2(qreply_ptr, qreply_tvect, arg1, arg2);
+	return (int)CallMacOS2(qreply_ptr, qreply_tvect, ether_host_to_mac_arg(arg1), ether_host_to_mac_arg(arg2));
 }
 typedef void (*flushq_ptr)(queue_t *, int flag);
 static uint32 flushq_tvect = 0;
 static inline void flushq(queue_t *arg1, int arg2)
 {
-	CallMacOS2(flushq_ptr, flushq_tvect, arg1, arg2);
+	CallMacOS2(flushq_ptr, flushq_tvect, ether_host_to_mac_arg(arg1), arg2);
 }
 typedef int (*msgdsize_ptr)(const mblk_t *);
 static uint32 msgdsize_tvect = 0;
 static inline int msgdsize(const mblk_t *arg1)
 {
-	return (int)CallMacOS1(msgdsize_ptr, msgdsize_tvect, arg1);
+	return (int)CallMacOS1(msgdsize_ptr, msgdsize_tvect, ether_host_to_mac_arg(arg1));
 }
 typedef void (*otenterint_ptr)(void);
 static uint32 otenterint_tvect = 0;
@@ -288,19 +335,19 @@ typedef int (*mi_open_comm_ptr)(DLPIStream **mi_opp_orig, size_t size, queue_t *
 static uint32 mi_open_comm_tvect = 0;
 static inline int mi_open_comm(DLPIStream **arg1, size_t arg2, queue_t *arg3, void *arg4, int arg5, int arg6, void *arg7)
 {
-	return (int)CallMacOS7(mi_open_comm_ptr, mi_open_comm_tvect, arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+	return (int)CallMacOS7(mi_open_comm_ptr, mi_open_comm_tvect, ether_host_to_mac_arg(arg1), arg2, ether_host_to_mac_arg(arg3), ether_host_to_mac_arg(arg4), arg5, arg6, ether_host_to_mac_arg(arg7));
 }
 typedef int (*mi_close_comm_ptr)(DLPIStream **mi_opp_orig, queue_t *q);
 static uint32 mi_close_comm_tvect = 0;
 static inline int mi_close_comm(DLPIStream **arg1, queue_t *arg2)
 {
-	return (int)CallMacOS2(mi_close_comm_ptr, mi_close_comm_tvect, arg1, arg2);
+	return (int)CallMacOS2(mi_close_comm_ptr, mi_close_comm_tvect, ether_host_to_mac_arg(arg1), ether_host_to_mac_arg(arg2));
 }
 typedef DLPIStream *(*mi_next_ptr_ptr)(DLPIStream *);
 static uint32 mi_next_ptr_tvect = 0;
 static inline DLPIStream *mi_next_ptr(DLPIStream *arg1)
 {
-	return (DLPIStream *)Mac2HostAddr((uint32)CallMacOS1(mi_next_ptr_ptr, mi_next_ptr_tvect, arg1));
+	return (DLPIStream *)ether_mac_to_host_arg((uint32)CallMacOS1(mi_next_ptr_ptr, mi_next_ptr_tvect, ether_host_to_mac_arg(arg1)));
 }
 #ifdef USE_ETHER_FULL_DRIVER
 typedef void (*ether_dispatch_packet_ptr)(uint32 p, uint32 size);
@@ -419,11 +466,15 @@ static uint8 InitStreamModuleImpl(void *theID)
 
 #ifndef USE_ETHER_FULL_DRIVER
 	// Initialize stream list (which might be leftover)
-	dlpi_stream_list = NULL;
+	if (!ensure_dlpi_stream_list())
+		return false;
+	set_dlpi_stream_list(NULL);
 
 	// Ask add-on for ethernet hardware address
 	ether_core_trace("InitStreamModuleImpl: requesting hardware address");
-	AO_get_ethernet_address(Host2MacAddr(hardware_address));
+	SheepArray<kEnetPhysicalAddressLength> addr;
+	AO_get_ethernet_address(addr.addr());
+	Mac2Host_memcpy(hardware_address, addr.addr(), kEnetPhysicalAddressLength);
 #endif
 
 	// Yes, we're open
@@ -474,7 +525,7 @@ static void TerminateStreamModuleImpl(void)
 
 #ifndef USE_ETHER_FULL_DRIVER
 	// This happens sometimes. I don't know why.
-	if (dlpi_stream_list != NULL)
+	if (get_dlpi_stream_list() != NULL)
 		printf("FATAL: TerminateStreamModule() called, but streams still open\n");
 #endif
 
@@ -523,7 +574,10 @@ int ether_open(queue_t *rdq, void *dev, int flag, int sflag, void *creds)
 	}
 
 	// Allocate DLPIStream structure
-	int err = mi_open_comm((DLPIStream **)&dlpi_stream_list, sizeof(DLPIStream), rdq, dev, flag, sflag, creds);
+	DLPIStream **stream_list = dlpi_stream_list_ref();
+	if (stream_list == NULL)
+		return MAC_ENOMEM;
+	int err = mi_open_comm(stream_list, sizeof(DLPIStream), rdq, dev, flag, sflag, creds);
 	if (err) {
 		ether_core_trace("ether_open: mi_open_comm failed err=%d", err);
 		return err;
@@ -571,7 +625,10 @@ int ether_close(queue_t *rdq, int flag, void *creds)
 	the_stream->multicast_list = NULL;
 
 	// Delete the DLPIStream
-	return mi_close_comm((DLPIStream **)&dlpi_stream_list, rdq);
+	DLPIStream **stream_list = dlpi_stream_list_ref();
+	if (stream_list == NULL)
+		return MAC_ENOMEM;
+	return mi_close_comm(stream_list, rdq);
 }
 
 
@@ -1161,7 +1218,7 @@ void ether_packet_received(mblk_t *mp)
 	DLPIStream *the_stream, *found_stream = NULL;
 	uint16 found_packetType = 0;
 	int32 found_destAddressType = 0;
-	for (the_stream = dlpi_stream_list; the_stream != NULL; the_stream = mi_next_ptr(the_stream)) {
+	for (the_stream = get_dlpi_stream_list(); the_stream != NULL; the_stream = mi_next_ptr(the_stream)) {
 
 		// Don't send to unbound streams
 		if (the_stream->dlpi_state == DL_UNBOUND)

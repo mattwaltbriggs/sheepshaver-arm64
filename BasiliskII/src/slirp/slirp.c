@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "slirp.h"
 
 /* host address */
@@ -28,6 +30,33 @@ struct ex_list *exec_list;
 fd_set *global_readfds, *global_writefds, *global_xfds;
 
 char slirp_hostname[33];
+
+int slirp_debug_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *value = getenv("SHEEPSHAVER_NET_TRACE");
+        enabled = value && value[0] && !(value[0] == '0' && value[1] == '\0');
+    }
+
+    return enabled;
+}
+
+void slirp_trace(const char *fmt, ...)
+{
+    va_list args;
+
+    if (!slirp_debug_enabled())
+        return;
+
+    va_start(args, fmt);
+    printf("SheepShaver slirp: ");
+    vprintf(fmt, args);
+    printf("\n");
+    fflush(stdout);
+    va_end(args);
+}
 
 #ifdef _WIN32
 
@@ -130,8 +159,7 @@ void slirp_cleanup(void)
 int slirp_init(void)
 {
     //    debug_init("/tmp/slirp.log", DEBUG_DEFAULT);
-    printf("SheepShaver slirp: init begin\n");
-    fflush(stdout);
+    slirp_trace("init begin");
     
 #ifdef _WIN32
     {
@@ -142,37 +170,30 @@ int slirp_init(void)
 #endif
 
     link_up = 1;
-    printf("SheepShaver slirp: link_up set\n");
-    fflush(stdout);
+    slirp_trace("link_up set");
 
     if_init();
-    printf("SheepShaver slirp: if_init done\n");
-    fflush(stdout);
+    slirp_trace("if_init done");
     ip_init();
-    printf("SheepShaver slirp: ip_init done\n");
-    fflush(stdout);
+    slirp_trace("ip_init done");
 
     /* Initialise mbufs *after* setting the MTU */
     m_init();
-    printf("SheepShaver slirp: m_init done\n");
-    fflush(stdout);
+    slirp_trace("m_init done");
 
     /* set default addresses */
     inet_aton("127.0.0.1", &loopback_addr);
 
     if (get_dns_addr(&dns_addr) < 0) {
-        printf("SheepShaver slirp: get_dns_addr failed\n");
-        fflush(stdout);
+        slirp_trace("get_dns_addr failed");
         return -1;
     }
-    printf("SheepShaver slirp: dns=%s\n", inet_ntoa(dns_addr));
-    fflush(stdout);
+    slirp_trace("dns=%s", inet_ntoa(dns_addr));
 
     inet_aton(CTL_SPECIAL, &special_addr);
 	alias_addr.s_addr = special_addr.s_addr | htonl(CTL_ALIAS);
 	getouraddr();
-    printf("SheepShaver slirp: init done\n");
-    fflush(stdout);
+    slirp_trace("init done");
     return 0;
 }
 
@@ -448,30 +469,27 @@ void slirp_select_poll(fd_set *readfds, fd_set *writefds, fd_set *xfds)
 						(char *)&so_error, &so_error_len) < 0)
 						so_error = WSAGetLastError();
 
-					if (so_error == 0) {
-						if (tcp_connect_poll_log_count < 16) {
-							printf("SheepShaver slirp: tcp connect complete fd=%d state=0x%x\n",
-								so->s, so->so_state);
-							fflush(stdout);
-							tcp_connect_poll_log_count++;
-						}
-						soisfconnected(so);
-					} else if (so_error == EAGAIN || so_error == WSAEWOULDBLOCK ||
-						so_error == WSAEINPROGRESS || so_error == WSAENOTCONN) {
-						if (tcp_connect_poll_log_count < 16) {
-							printf("SheepShaver slirp: tcp connect still pending fd=%d error=%d state=0x%x\n",
-								so->s, so_error, so->so_state);
-							fflush(stdout);
-							tcp_connect_poll_log_count++;
-						}
-						continue;
-					} else {
-						if (tcp_connect_poll_log_count < 16) {
-							printf("SheepShaver slirp: tcp connect failed fd=%d error=%d state=0x%x\n",
-								so->s, so_error, so->so_state);
-							fflush(stdout);
-							tcp_connect_poll_log_count++;
-						}
+						if (so_error == 0) {
+							if (tcp_connect_poll_log_count < 16) {
+								slirp_trace("tcp connect complete fd=%d state=0x%x",
+									so->s, so->so_state);
+								tcp_connect_poll_log_count++;
+							}
+							soisfconnected(so);
+						} else if (so_error == EAGAIN || so_error == WSAEWOULDBLOCK ||
+							so_error == WSAEINPROGRESS || so_error == WSAENOTCONN) {
+							if (tcp_connect_poll_log_count < 16) {
+								slirp_trace("tcp connect still pending fd=%d error=%d state=0x%x",
+									so->s, so_error, so->so_state);
+								tcp_connect_poll_log_count++;
+							}
+							continue;
+						} else {
+							if (tcp_connect_poll_log_count < 16) {
+								slirp_trace("tcp connect failed fd=%d error=%d state=0x%x",
+									so->s, so_error, so->so_state);
+								tcp_connect_poll_log_count++;
+							}
 						WSASetLastError(so_error);
 						so->so_state = SS_NOFDREF;
 					}
@@ -654,8 +672,7 @@ void slirp_input(const uint8_t *pkt, int pkt_len)
     
     proto = (pkt[12] << 8) | pkt[13];
     if (slirp_input_log_count < 8) {
-        printf("SheepShaver slirp: slirp_input enter len=%d proto=0x%04x\n", pkt_len, proto);
-        fflush(stdout);
+        slirp_trace("slirp_input enter len=%d proto=0x%04x", pkt_len, proto);
     }
     switch(proto) {
     case ETH_P_ARP:
@@ -674,16 +691,14 @@ void slirp_input(const uint8_t *pkt, int pkt_len)
 
         ip_input(m);
         if (slirp_input_log_count < 8) {
-            printf("SheepShaver slirp: slirp_input ip_input returned len=%d\n", pkt_len);
-            fflush(stdout);
+            slirp_trace("slirp_input ip_input returned len=%d", pkt_len);
         }
         break;
     default:
         break;
     }
     if (slirp_input_log_count < 8) {
-        printf("SheepShaver slirp: slirp_input exit len=%d proto=0x%04x\n", pkt_len, proto);
-        fflush(stdout);
+        slirp_trace("slirp_input exit len=%d proto=0x%04x", pkt_len, proto);
         slirp_input_log_count++;
     }
 }

@@ -321,6 +321,8 @@ void ExitAll(void)
 
 void PatchAfterStartup(void)
 {
+	fprintf(stderr, "SheepShaver boot: PatchAfterStartup begin\n");
 	ExecuteNative(NATIVE_VIDEO_INSTALL_ACCEL);
 	InstallExtFS();
+	fprintf(stderr, "SheepShaver boot: PatchAfterStartup done\n");
 }

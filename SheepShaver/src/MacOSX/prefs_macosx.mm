@@ -32,6 +32,42 @@
 #include "VMSettingsController.h"
 #include "prefs_editor.h"
 
+static void log_diagnostics_exit(void)
+{
+	fprintf(stderr, "--- SheepShaver process exiting pid=%d ---\n", getpid());
+}
+
+static void redirect_diagnostics_to_log(void)
+{
+	static bool did_redirect = false;
+	if (did_redirect)
+		return;
+
+	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+	NSString *logsDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs"];
+	NSString *logPath = [logsDir stringByAppendingPathComponent:@"SheepShaver.log"];
+	[[NSFileManager defaultManager] createDirectoryAtPath:logsDir
+	                          withIntermediateDirectories:YES
+	                                           attributes:nil
+	                                                error:nil];
+
+	const char *path = [logPath fileSystemRepresentation];
+	if (freopen(path, "a", stdout) != NULL)
+		dup2(fileno(stdout), fileno(stderr));
+
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+	fprintf(stderr, "\n--- SheepShaver launch %s pid=%d ---\n",
+	        [[[NSDate date] description] UTF8String], getpid());
+	char cwd[1024];
+	if (getcwd(cwd, sizeof(cwd)) != NULL)
+		fprintf(stderr, "SheepShaver cwd=%s\n", cwd);
+	atexit(log_diagnostics_exit);
+
+	[pool release];
+	did_redirect = true;
+}
+
 
 @interface SheepShaverMain : NSObject <NSApplicationDelegate>
 {
@@ -102,6 +138,7 @@
 
 bool PrefsEditor(void)
 {
+	redirect_diagnostics_to_log();
 	fprintf(stderr, "SheepShaver prefs: PrefsEditor entered\n");
 	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 	VMSettingsController *controller = [VMSettingsController sharedInstance];
@@ -139,6 +176,8 @@ void prefs_init(void)
 
 	pool = [[NSAutoreleasePool alloc] init];
 
+	redirect_diagnostics_to_log();
+
 	appMenu = [[[NSApp mainMenu] itemAtIndex:0] submenu];
 	menuItem = [[NSMenuItem alloc] initWithTitle:@"Preferences..." action:@selector(openPreferences:) keyEquivalent:@","];
 	[appMenu insertItem:menuItem atIndex:2];
@@ -157,4 +196,26 @@ void prefs_init(void)
 
 void prefs_exit(void)
 {
+}
+
+/*
+ *  Cocoa event pump - called from the main thread to keep the app responsive
+ *  while the PPC emulation runs on a background thread.
+ */
+
+extern "C" void pump_cocoa_events(void)
+{
+	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+	NSEvent *event;
+	// Filter out keyboard events so SDL can process them via its own event system.
+	// Cocoa stealing key events before SDL_PeepEvents is the classic "keyboard doesn't work" bug.
+	NSEventMask eventMask = NSEventMaskAny
+		& ~(NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged);
+	while ((event = [NSApp nextEventMatchingMask:eventMask
+	                                   untilDate:[NSDate distantPast]
+	                                       mode:NSDefaultRunLoopMode
+	                                      dequeue:YES]) != nil) {
+		[NSApp sendEvent:event];
+	}
+	[pool release];
 }

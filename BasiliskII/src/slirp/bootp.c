@@ -128,11 +128,10 @@ static void bootp_reply(struct bootp_t *bp)
     dhcp_decode(bp->bp_vend, DHCP_OPT_LEN, &dhcp_msg_type);
     static int bootp_log_count = 0;
     if (bootp_log_count < 16) {
-        printf("SheepShaver slirp: bootp request type=%d xid=0x%08x flags=0x%04x chaddr=%02x:%02x:%02x:%02x:%02x:%02x\n",
-               dhcp_msg_type, ntohl(bp->bp_xid), ntohs(bp->bp_flags),
-               bp->bp_hwaddr[0], bp->bp_hwaddr[1], bp->bp_hwaddr[2],
-               bp->bp_hwaddr[3], bp->bp_hwaddr[4], bp->bp_hwaddr[5]);
-        fflush(stdout);
+        slirp_trace("bootp request type=%d xid=0x%08x flags=0x%04x chaddr=%02x:%02x:%02x:%02x:%02x:%02x",
+                    dhcp_msg_type, ntohl(bp->bp_xid), ntohs(bp->bp_flags),
+                    bp->bp_hwaddr[0], bp->bp_hwaddr[1], bp->bp_hwaddr[2],
+                    bp->bp_hwaddr[3], bp->bp_hwaddr[4], bp->bp_hwaddr[5]);
     }
     
     if (dhcp_msg_type == 0)
@@ -183,10 +182,9 @@ static void bootp_reply(struct bootp_t *bp)
         char yiaddr[INET_ADDRSTRLEN], server[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &daddr.sin_addr, yiaddr, sizeof(yiaddr));
         inet_ntop(AF_INET, &saddr.sin_addr, server, sizeof(server));
-        printf("SheepShaver slirp: bootp reply type=%d yiaddr=%s server=%s\n",
-               dhcp_msg_type == DHCPDISCOVER ? DHCPOFFER : DHCPACK,
-               yiaddr, server);
-        fflush(stdout);
+        slirp_trace("bootp reply type=%d yiaddr=%s server=%s",
+                    dhcp_msg_type == DHCPDISCOVER ? DHCPOFFER : DHCPACK,
+                    yiaddr, server);
         bootp_log_count++;
     }
 

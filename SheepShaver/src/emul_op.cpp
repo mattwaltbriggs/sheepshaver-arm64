@@ -266,7 +266,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 				D(bug("MakeExecutable TVECT at %08x\n", MakeExecutableTvec));
 				WriteMacInt32(MakeExecutableTvec, NativeFunction(NATIVE_MAKE_EXECUTABLE));
 #if !EMULATED_PPC
-			WriteMacInt32(MakeExecutableTvec + 4, (uint32)TOC);
+				WriteMacInt32(MakeExecutableTvec + 4, (uint32)TOC);
 #endif
 
 			// Patch DebugStr()
@@ -313,10 +313,27 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			}
 			break;
 
-		case OP_IRQ:			// Level 1 interrupt
+		case OP_IRQ: {			// Level 1 interrupt
 			WriteMacInt16(ReadMacInt32(KernelDataAddr + 0x67c), 0);	// Clear interrupt
 			r->d[0] = 0;
-			if (HasMacStarted()) {
+			static uint64 op_irq_count = 0;
+			static bool op_irq_mac_started_logged = false;
+			op_irq_count++;
+			const bool mac_started = HasMacStarted();
+			if (mac_started && !op_irq_mac_started_logged) {
+				fprintf(stderr,
+				        "SheepShaver boot: OP_IRQ sees Mac started count=%llu cfc=0x%08x flags=0x%08x\n",
+				        (unsigned long long)op_irq_count,
+				        ReadMacInt32(0xcfc), InterruptFlags);
+				op_irq_mac_started_logged = true;
+			}
+			if (op_irq_count <= 5 || (op_irq_count & 0xff) == 0)
+				fprintf(stderr,
+				        "SheepShaver irq: OP_IRQ count=%llu mac_started=%s flags=0x%08x cfc=0x%08x\n",
+				        (unsigned long long)op_irq_count,
+				        mac_started ? "true" : "false",
+				        InterruptFlags, ReadMacInt32(0xcfc));
+			if (mac_started) {
 				if (InterruptFlags & INTFLAG_VIA) {
 					ClearInterruptFlag(INTFLAG_VIA);
 #if !PRECISE_TIMING
@@ -357,6 +374,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			} else
 				r->d[0] = 1;
 			break;
+		}
 
 		case OP_SCSI_DISPATCH: {	// SCSIDispatch() replacement
 			uint32 ret = ReadMacInt32(r->a[7]);

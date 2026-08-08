@@ -47,6 +47,7 @@
 #include <semaphore.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <signal.h>
 #include <map>
@@ -94,9 +95,25 @@ using std::map;
 #define STATISTICS 0
 #define MONITOR 0
 
+static bool ether_trace_enabled(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0) {
+		const char *value = getenv("SHEEPSHAVER_NET_TRACE");
+		enabled = value && value[0] && !(value[0] == '0' && value[1] == '\0');
+	}
+
+	return enabled != 0;
+}
+
 static void ether_trace(const char *fmt, ...)
 {
 	va_list ap;
+
+	if (!ether_trace_enabled())
+		return;
+
 	va_start(ap, fmt);
 	printf("SheepShaver ether: ");
 	vprintf(fmt, ap);
@@ -122,6 +139,9 @@ static void ether_trace_ip_addr(char *buf, size_t buf_size, const uint8 *addr)
 
 static void ether_trace_frame(const char *prefix, const uint8 *frame, int len)
 {
+	if (!ether_trace_enabled())
+		return;
+
 	if (len < 14) {
 		ether_trace("%s len=%d", prefix, len);
 		return;

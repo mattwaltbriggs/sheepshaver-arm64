@@ -65,11 +65,7 @@ tcp_seq tcp_iss;                /* tcp initial send seq # */
  * Set DELACK for segments received in order, but ack immediately
  * when segments are out of order (so fast retransmit can work).
  */
-#if SIZEOF_CHAR_P == 4
-#define TCP_REASS_EMPTY(tp)	((tp)->seg_next == (tcpiphdrp_32)(tp))
-#else
-#define TCP_REASS_EMPTY(tp)	((tp)->seg_next == (tcpiphdrp_32)(uintptr_t)(tp))
-#endif
+#define TCP_REASS_EMPTY(tp)	((tp)->seg_next == NULL)
 
 #ifdef TCP_ACK_HACK
 #define TCP_REASS(tp, ti, m, so, flags) {\
@@ -119,7 +115,8 @@ tcp_seq tcp_iss;                /* tcp initial send seq # */
 int
 tcp_reass(register struct tcpcb *tp, register struct tcpiphdr *ti, struct mbuf *m)
 {
-	register struct tcpiphdr *q;
+	register struct tcp_reass_entry *q;
+	struct tcp_reass_entry *entry;
 	struct socket *so = tp->t_socket;
 	int flags;
 	
@@ -133,9 +130,8 @@ tcp_reass(register struct tcpcb *tp, register struct tcpiphdr *ti, struct mbuf *
 	/*
 	 * Find a segment which begins after this one does.
 	 */
-	for (q = (struct tcpiphdr *)tp->seg_next; q != (struct tcpiphdr *)tp;
-	    q = (struct tcpiphdr *)q->ti_next)
-		if (SEQ_GT(q->ti_seq, ti->ti_seq))
+	for (q = tp->seg_next; q != NULL; q = q->next)
+		if (SEQ_GT(q->ti->ti_seq, ti->ti_seq))
 			break;
 
 	/*
@@ -143,11 +139,11 @@ tcp_reass(register struct tcpcb *tp, register struct tcpiphdr *ti, struct mbuf *
 	 * our data already.  If so, drop the data from the incoming
 	 * segment.  If it provides all of our data, drop us.
 	 */
-	if ((struct tcpiphdr *)q->ti_prev != (struct tcpiphdr *)tp) {
+	if ((q ? q->prev : tp->seg_prev) != NULL) {
 		register int i;
-		q = (struct tcpiphdr *)q->ti_prev;
+		struct tcpiphdr *prev_ti = (q ? q->prev : tp->seg_prev)->ti;
 		/* conversion to int (in i) handles seq wraparound */
-		i = q->ti_seq + q->ti_len - ti->ti_seq;
+		i = prev_ti->ti_seq + prev_ti->ti_len - ti->ti_seq;
 		if (i > 0) {
 			if (i >= ti->ti_len) {
 				tcpstat.tcps_rcvduppack++;
@@ -165,36 +161,63 @@ tcp_reass(register struct tcpcb *tp, register struct tcpiphdr *ti, struct mbuf *
 			ti->ti_len -= i;
 			ti->ti_seq += i;
 		}
-		q = (struct tcpiphdr *)(q->ti_next);
 	}
 	tcpstat.tcps_rcvoopack++;
 	tcpstat.tcps_rcvoobyte += ti->ti_len;
-	REASS_MBUF(ti) = (mbufp_32) m;		/* XXX */
+
+	entry = (struct tcp_reass_entry *)malloc(sizeof(*entry));
+	if (entry == NULL) {
+		m_freem(m);
+		goto present;
+	}
+	entry->next = NULL;
+	entry->prev = NULL;
+	entry->ti = ti;
+	entry->m = m;
 
 	/*
 	 * While we overlap succeeding segments trim them or,
 	 * if they are completely covered, dequeue them.
 	 */
-	while (q != (struct tcpiphdr *)tp) {
-		register int i = (ti->ti_seq + ti->ti_len) - q->ti_seq;
+	while (q != NULL) {
+		register int i = (ti->ti_seq + ti->ti_len) - q->ti->ti_seq;
 		if (i <= 0)
 			break;
-		if (i < q->ti_len) {
-			q->ti_seq += i;
-			q->ti_len -= i;
-			m_adj((struct mbuf *) REASS_MBUF(q), i);
+		if (i < q->ti->ti_len) {
+			q->ti->ti_seq += i;
+			q->ti->ti_len -= i;
+			m_adj(q->m, i);
 			break;
 		}
-		q = (struct tcpiphdr *)q->ti_next;
-		m = (struct mbuf *) REASS_MBUF((struct tcpiphdr *)q->ti_prev);
-		remque_32((void *)(q->ti_prev));
-		m_freem(m);
+		{
+			struct tcp_reass_entry *next = q->next;
+			if (q->prev)
+				q->prev->next = q->next;
+			else
+				tp->seg_next = q->next;
+			if (q->next)
+				q->next->prev = q->prev;
+			else
+				tp->seg_prev = q->prev;
+			m_freem(q->m);
+			free(q);
+			q = next;
+		}
 	}
 
 	/*
 	 * Stick new segment in its place.
 	 */
-	insque_32(ti, (void *)(q->ti_prev));
+	entry->next = q;
+	entry->prev = q ? q->prev : tp->seg_prev;
+	if (entry->prev)
+		entry->prev->next = entry;
+	else
+		tp->seg_next = entry;
+	if (q)
+		q->prev = entry;
+	else
+		tp->seg_prev = entry;
 
 present:
 	/*
@@ -203,21 +226,26 @@ present:
 	 */
 	if (!TCPS_HAVEESTABLISHED(tp->t_state))
 		return (0);
-#if SIZEOF_CHAR_P != 4
-	if (tp->seg_next == (tcpiphdrp_32)(uintptr_t)tp)
+	q = tp->seg_next;
+	if (q == NULL)
 		return (0);
-#endif
-	ti = (struct tcpiphdr *) tp->seg_next;
-	if (ti == (struct tcpiphdr *)tp || ti->ti_seq != tp->rcv_nxt)
+	ti = q->ti;
+	if (ti->ti_seq != tp->rcv_nxt)
 		return (0);
 	if (tp->t_state == TCPS_SYN_RECEIVED && ti->ti_len)
 		return (0);
 	do {
+		q = tp->seg_next;
+		ti = q->ti;
 		tp->rcv_nxt += ti->ti_len;
 		flags = ti->ti_flags & TH_FIN;
-		remque_32(ti);
-		m = (struct mbuf *) REASS_MBUF(ti); /* XXX */
-		ti = (struct tcpiphdr *)ti->ti_next;
+		m = q->m;
+		tp->seg_next = q->next;
+		if (tp->seg_next)
+			tp->seg_next->prev = NULL;
+		else
+			tp->seg_prev = NULL;
+		free(q);
 /*		if (so->so_state & SS_FCANTRCVMORE) */
 		if (so->so_state & SS_FCANTSENDMORE)
 			m_freem(m);
@@ -227,9 +255,25 @@ present:
 			} else
 				sbappend(so, m);
 		}
-	} while (ti != (struct tcpiphdr *)tp && ti->ti_seq == tp->rcv_nxt);
+	} while (tp->seg_next != NULL && tp->seg_next->ti->ti_seq == tp->rcv_nxt);
 /*	sorwakeup(so); */
 	return (flags);
+}
+
+void
+tcp_reass_flush(struct tcpcb *tp)
+{
+	struct tcp_reass_entry *entry = tp->seg_next;
+
+	while (entry != NULL) {
+		struct tcp_reass_entry *next = entry->next;
+		m_freem(entry->m);
+		free(entry);
+		entry = next;
+	}
+
+	tp->seg_next = NULL;
+	tp->seg_prev = NULL;
 }
 
 /*
@@ -264,15 +308,14 @@ void tcp_input(register struct mbuf *m, int iphlen, struct socket *inso)
 	 */
 	if (m == NULL) {
 		so = inso;
-		{
-			static int tcp_resume_log_count = 0;
-			if (tcp_resume_log_count < 8) {
-				printf("SheepShaver slirp: tcp_input resume so=%p state=0x%x\n",
-					(void *)so, so ? so->so_state : 0);
-				fflush(stdout);
-				tcp_resume_log_count++;
+			{
+				static int tcp_resume_log_count = 0;
+				if (tcp_resume_log_count < 8) {
+					slirp_trace("tcp_input resume so=%p state=0x%x",
+						(void *)so, so ? so->so_state : 0);
+					tcp_resume_log_count++;
+				}
 			}
-		}
 
 		/* Re-set a few variables */
 		tp = sototcpcb(so);
@@ -336,19 +379,18 @@ void tcp_input(register struct mbuf *m, int iphlen, struct socket *inso)
 	ti->ti_len = tlen;
 	{
 		static int tcp_parse_log_count = 0;
-	if (tcp_parse_log_count < 8) {
-			uint32 src = ntohl(ti->ti_src.s_addr);
-			uint32 dst = ntohl(ti->ti_dst.s_addr);
-			printf("SheepShaver slirp: tcp_input parsed len=%d off=%d flags=0x%x %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u\n",
-				tlen, off, ti->ti_flags,
-				(src >> 24) & 0xff, (src >> 16) & 0xff, (src >> 8) & 0xff, src & 0xff,
-				ntohs(ti->ti_sport),
-				(dst >> 24) & 0xff, (dst >> 16) & 0xff, (dst >> 8) & 0xff, dst & 0xff,
-				ntohs(ti->ti_dport));
-			fflush(stdout);
-			tcp_parse_log_count++;
+		if (tcp_parse_log_count < 8) {
+				uint32 src = ntohl(ti->ti_src.s_addr);
+				uint32 dst = ntohl(ti->ti_dst.s_addr);
+				slirp_trace("tcp_input parsed len=%d off=%d flags=0x%x %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u",
+					tlen, off, ti->ti_flags,
+					(src >> 24) & 0xff, (src >> 16) & 0xff, (src >> 8) & 0xff, src & 0xff,
+					ntohs(ti->ti_sport),
+					(dst >> 24) & 0xff, (dst >> 16) & 0xff, (dst >> 8) & 0xff, dst & 0xff,
+					ntohs(ti->ti_dport));
+				tcp_parse_log_count++;
+			}
 		}
-	}
 	if (off > sizeof(struct tcphdr)) {
 		optlen = off - sizeof(struct tcphdr);
 		optp = mtod(m, caddr_t) + sizeof(struct tcpiphdr);
@@ -455,17 +497,16 @@ findso:
 		goto drop;
 
 	tp = sototcpcb(so);
-	{
-		static int tcp_state_log_count = 0;
-	if (tcp_state_log_count < 8) {
-			printf("SheepShaver slirp: tcp_input state so=%p state=0x%x t_state=%d ti_len=%d flags=0x%x snd_una=%u snd_max=%u rcv_nxt=%u ti_seq=%u ti_ack=%u\n",
-				(void *)so, so->so_state, tp ? tp->t_state : -1, ti->ti_len, tiflags,
-				tp ? tp->snd_una : 0, tp ? tp->snd_max : 0,
-				tp ? tp->rcv_nxt : 0, ti->ti_seq, ti->ti_ack);
-			fflush(stdout);
-			tcp_state_log_count++;
+		{
+			static int tcp_state_log_count = 0;
+		if (tcp_state_log_count < 8) {
+				slirp_trace("tcp_input state so=%p state=0x%x t_state=%d ti_len=%d flags=0x%x snd_una=%u snd_max=%u rcv_nxt=%u ti_seq=%u ti_ack=%u",
+					(void *)so, so->so_state, tp ? tp->t_state : -1, ti->ti_len, tiflags,
+					tp ? tp->snd_una : 0, tp ? tp->snd_max : 0,
+					tp ? tp->rcv_nxt : 0, ti->ti_seq, ti->ti_ack);
+				tcp_state_log_count++;
+			}
 		}
-	}
 
 	/* XXX Should never fail */
 	if (tp == 0)
@@ -707,16 +748,15 @@ SEQ_GT(ti->ti_ack, tp->t_rtseq))
 			{
 				int connect_result = tcp_fconnect(so);
 				int error = WSAGetLastError();
-				static int tcp_connect_start_log_count = 0;
-				if (tcp_connect_start_log_count < 8) {
-					char addrstr[INET_ADDRSTRLEN];
-					printf("SheepShaver slirp: tcp connect start fd=%d ret=%d errno=%d dst=%s:%d state=0x%x\n",
-						so->s, connect_result, error,
-						inet_ntop(AF_INET, &so->so_faddr, addrstr, sizeof(addrstr)),
-						ntohs(so->so_fport), so->so_state);
-					fflush(stdout);
-					tcp_connect_start_log_count++;
-				}
+					static int tcp_connect_start_log_count = 0;
+					if (tcp_connect_start_log_count < 8) {
+						char addrstr[INET_ADDRSTRLEN];
+						slirp_trace("tcp connect start fd=%d ret=%d errno=%d dst=%s:%d state=0x%x",
+							so->s, connect_result, error,
+							inet_ntop(AF_INET, &so->so_faddr, addrstr, sizeof(addrstr)),
+							ntohs(so->so_fport), so->so_state);
+						tcp_connect_start_log_count++;
+					}
 				WSASetLastError(error);
 				if (connect_result == -1) {
 				if ((error != WSAEINPROGRESS) && (error != WSAEWOULDBLOCK)) {
@@ -763,16 +803,15 @@ SEQ_GT(ti->ti_ack, tp->t_rtseq))
 		 * Check if the connect succeeded
 		 */
 		if (so->so_state & SS_NOFDREF) {
-			static int tcp_delayed_connect_fail_log_count = 0;
-			if (tcp_delayed_connect_fail_log_count < 8) {
-				char addrstr[INET_ADDRSTRLEN];
-				printf("SheepShaver slirp: tcp delayed connect reset fd=%d dst=%s:%d flags=0x%x\n",
-					so->s,
-					inet_ntop(AF_INET, &so->so_faddr, addrstr, sizeof(addrstr)),
-					ntohs(so->so_fport), tiflags);
-				fflush(stdout);
-				tcp_delayed_connect_fail_log_count++;
-			}
+				static int tcp_delayed_connect_fail_log_count = 0;
+				if (tcp_delayed_connect_fail_log_count < 8) {
+					char addrstr[INET_ADDRSTRLEN];
+					slirp_trace("tcp delayed connect reset fd=%d dst=%s:%d flags=0x%x",
+						so->s,
+						inet_ntop(AF_INET, &so->so_faddr, addrstr, sizeof(addrstr)),
+						ntohs(so->so_fport), tiflags);
+					tcp_delayed_connect_fail_log_count++;
+				}
 			if (tiflags & TH_ACK)
 				tcp_respond(tp, ti, m, (tcp_seq)0, ti->ti_ack, TH_RST);
 			else {
@@ -1095,9 +1134,8 @@ SEQ_GT(ti->ti_ack, tp->t_rtseq))
 		{
 			static int tcp_syn_received_log_count = 0;
 			if (tcp_syn_received_log_count < 8) {
-				printf("SheepShaver slirp: tcp_input SYN_RECEIVED ack-check snd_una=%u snd_max=%u ti_ack=%u ti_len=%d flags=0x%x\n",
+				slirp_trace("tcp_input SYN_RECEIVED ack-check snd_una=%u snd_max=%u ti_ack=%u ti_len=%d flags=0x%x",
 					tp->snd_una, tp->snd_max, ti->ti_ack, ti->ti_len, tiflags);
-				fflush(stdout);
 				tcp_syn_received_log_count++;
 			}
 		}
@@ -1143,9 +1181,8 @@ SEQ_GT(ti->ti_ack, tp->t_rtseq))
 		{
 			static int tcp_syn_reass_log_count = 0;
 			if (tcp_syn_reass_log_count < 8) {
-				printf("SheepShaver slirp: tcp_input SYN_RECEIVED before tcp_reass present seg_next=0x%x rcv_nxt=%u\n",
-					tp->seg_next, tp->rcv_nxt);
-				fflush(stdout);
+				slirp_trace("tcp_input SYN_RECEIVED before tcp_reass present seg_next=%p rcv_nxt=%u",
+					(void *)tp->seg_next, tp->rcv_nxt);
 				tcp_syn_reass_log_count++;
 			}
 		}
@@ -1153,9 +1190,8 @@ SEQ_GT(ti->ti_ack, tp->t_rtseq))
 		{
 			static int tcp_syn_reass_return_log_count = 0;
 			if (tcp_syn_reass_return_log_count < 8) {
-				printf("SheepShaver slirp: tcp_input SYN_RECEIVED after tcp_reass present seg_next=0x%x rcv_nxt=%u\n",
-					tp->seg_next, tp->rcv_nxt);
-				fflush(stdout);
+				slirp_trace("tcp_input SYN_RECEIVED after tcp_reass present seg_next=%p rcv_nxt=%u",
+					(void *)tp->seg_next, tp->rcv_nxt);
 				tcp_syn_reass_return_log_count++;
 			}
 		}
@@ -1246,9 +1282,8 @@ SEQ_GT(ti->ti_ack, tp->t_rtseq))
 		{
 			static int tcp_synrx_to_est_log_count = 0;
 			if (tcp_synrx_to_est_log_count < 8) {
-				printf("SheepShaver slirp: tcp_input synrx_to_est snd_una=%u snd_max=%u ti_ack=%u ti_len=%d so_snd_cc=%u snd_wnd=%u\n",
+				slirp_trace("tcp_input synrx_to_est snd_una=%u snd_max=%u ti_ack=%u ti_len=%d so_snd_cc=%u snd_wnd=%u",
 					tp->snd_una, tp->snd_max, ti->ti_ack, ti->ti_len, so->so_snd.sb_cc, tp->snd_wnd);
-				fflush(stdout);
 				tcp_synrx_to_est_log_count++;
 			}
 		}
@@ -1477,9 +1512,8 @@ dodata:
 		{
 			static int tcp_reass_log_count = 0;
 			if (tcp_reass_log_count < 8) {
-				printf("SheepShaver slirp: tcp_input before TCP_REASS state=%d ti_len=%d flags=0x%x rcv_nxt=%u ti_seq=%u so_rcv_cc=%u\n",
+				slirp_trace("tcp_input before TCP_REASS state=%d ti_len=%d flags=0x%x rcv_nxt=%u ti_seq=%u so_rcv_cc=%u",
 					tp->t_state, ti->ti_len, tiflags, tp->rcv_nxt, ti->ti_seq, so->so_rcv.sb_cc);
-				fflush(stdout);
 				tcp_reass_log_count++;
 			}
 		}
@@ -1487,9 +1521,8 @@ dodata:
 		{
 			static int tcp_reass_return_log_count = 0;
 			if (tcp_reass_return_log_count < 8) {
-				printf("SheepShaver slirp: tcp_input after TCP_REASS state=%d flags=0x%x rcv_nxt=%u so_rcv_cc=%u\n",
+				slirp_trace("tcp_input after TCP_REASS state=%d flags=0x%x rcv_nxt=%u so_rcv_cc=%u",
 					tp->t_state, tiflags, tp->rcv_nxt, so->so_rcv.sb_cc);
-				fflush(stdout);
 				tcp_reass_return_log_count++;
 			}
 		}

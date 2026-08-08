@@ -194,7 +194,7 @@ struct tcpcb *tcp_newtcpcb(struct socket *so)
 		return ((struct tcpcb *)0);
 	
 	memset((char *) tp, 0, sizeof(struct tcpcb));
-	tp->seg_next = tp->seg_prev = (tcpiphdrp_32)tp;
+	tp->seg_next = tp->seg_prev = NULL;
 	tp->t_maxseg = tcp_mssdflt;
 	
 	tp->t_flags = tcp_do_rfc1323 ? (TF_REQ_SCALE|TF_REQ_TSTMP) : 0;
@@ -260,21 +260,13 @@ struct tcpcb *tcp_drop(struct tcpcb *tp, int err)
  */
 struct tcpcb *tcp_close(register struct tcpcb *tp)
 {
-	register struct tcpiphdr *t;
 	struct socket *so = tp->t_socket;
-	register struct mbuf *m;
 
 	DEBUG_CALL("tcp_close");
 	DEBUG_ARG("tp = %lx", (long )tp);
 	
 	/* free the reassembly queue, if any */
-	t = (struct tcpiphdr *) tp->seg_next;
-	while (t != (struct tcpiphdr *)tp) {
-		t = (struct tcpiphdr *)t->ti_next;
-		m = (struct mbuf *) REASS_MBUF((struct tcpiphdr *)t->ti_prev);
-		remque_32((struct tcpiphdr *) t->ti_prev);
-		m_freem(m);
-	}
+	tcp_reass_flush(tp);
 	/* It's static */
 /*	if (tp->t_template)
  *		(void) m_free(dtom(tp->t_template));

@@ -36,18 +36,26 @@
 #include "tcpip.h"
 #include "tcp_timer.h"
 
-#if SIZEOF_CHAR_P == 4
- typedef struct tcpiphdr *tcpiphdrp_32;
-#else
- typedef u_int32_t tcpiphdrp_32;
-#endif
+struct mbuf;
+
+/*
+ * Keep TCP reassembly bookkeeping out of the tcpiphdr overlay.  The original
+ * SLiRP queue stored host pointers in 32-bit packet fields, which truncates
+ * addresses on 64-bit hosts.
+ */
+struct tcp_reass_entry {
+	struct tcp_reass_entry *next;
+	struct tcp_reass_entry *prev;
+	struct tcpiphdr *ti;
+	struct mbuf *m;
+};
 
 /*
  * Tcp control block, one per tcp; fields:
  */
 struct tcpcb {
-	tcpiphdrp_32 seg_next;	/* sequencing queue */
-	tcpiphdrp_32 seg_prev;
+	struct tcp_reass_entry *seg_next;	/* sequencing queue */
+	struct tcp_reass_entry *seg_prev;
 	short	t_state;		/* state of this connection */
 	short	t_timer[TCPT_NTIMERS];	/* tcp timers */
 	short	t_rxtshift;		/* log(2) of rexmt exp. backoff */
@@ -165,21 +173,6 @@ struct tcpcb {
  */
 #define	TCP_REXMTVAL(tp) \
 	(((tp)->t_srtt >> TCP_RTT_SHIFT) + (tp)->t_rttvar)
-
-/* XXX
- * We want to avoid doing m_pullup on incoming packets but that
- * means avoiding dtom on the tcp reassembly code.  That in turn means
- * keeping an mbuf pointer in the reassembly queue (since we might
- * have a cluster).  As a quick hack, the source & destination
- * port numbers (which are no longer needed once we've located the
- * tcpcb) are overlayed with an mbuf pointer.
- */
-#if SIZEOF_CHAR_P == 4
-typedef struct mbuf *mbufp_32;
-#else
-typedef u_int32_t mbufp_32;
-#endif
-#define REASS_MBUF(ti) (*(mbufp_32 *)&((ti)->ti_t))
 
 /*
  * TCP statistics.

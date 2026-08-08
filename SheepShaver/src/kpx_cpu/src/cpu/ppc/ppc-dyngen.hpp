@@ -44,7 +44,11 @@ class powerpc_dyngen
 	// Code generators for PowerPC synthetic instructions
 #ifndef NO_DEFINE_ALIAS
 #	define DEFINE_GEN(NAME,RET,ARGS) RET NAME ARGS;
+#if defined(__APPLE__) && __has_include("../../../../Unix/dyngen_precompiled/ppc-dyngen-ops.hpp")
+#	include "../../../../Unix/dyngen_precompiled/ppc-dyngen-ops.hpp"
+#else
 #	include "ppc-dyngen-ops.hpp"
+#endif
 #endif
 
 public:

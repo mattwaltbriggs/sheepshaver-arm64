@@ -105,6 +105,9 @@
 #include "timer.h"
 #include "adb.h"
 #include "video.h"
+#ifdef USE_SDL_VIDEO
+extern void VideoRefresh(void);
+#endif
 #include "sys.h"
 #include "macos_util.h"
 #include "rom_patches.h"
@@ -276,6 +279,18 @@ extern "C" void sigusr2_handler_init(int sig, siginfo_t *sip, void *scp);
 extern "C" void sigusr2_handler(int sig, siginfo_t *sip, void *scp);
 static void sigsegv_handler(int sig, siginfo_t *sip, void *scp);
 static void sigill_handler(int sig, siginfo_t *sip, void *scp);
+#endif
+static void sigabrt_handler(int sig);
+
+#ifdef __APPLE__
+extern "C" void pump_cocoa_events(void);
+static volatile bool emul_func_done = false;
+static void *emul_func_wrapper(void *arg)
+{
+	void *result = emul_func(arg);
+	emul_func_done = true;
+	return result;
+}
 #endif
 
 
@@ -646,6 +661,7 @@ static bool load_mac_rom(void)
 static bool install_signal_handlers(void)
 {
 	char str[256];
+	signal(SIGABRT, sigabrt_handler);
 #if !EMULATED_PPC
 	// Create and install stacks for signal handlers
 	sig_stack.ss_sp = malloc(SIG_STACK_SIZE);
@@ -697,6 +713,11 @@ static bool install_signal_handlers(void)
 	}
 #endif
 	return true;
+}
+
+static void sigabrt_handler(int sig)
+{
+	(void)sig;
 }
 
 #ifdef USE_SDL
@@ -883,9 +904,7 @@ int main(int argc, char **argv)
 	SysInit();
 
 	// Show preferences editor
-	fprintf(stderr, "SheepShaver launch: nogui=%s\n", PrefsFindBool("nogui") ? "true" : "false");
 	if (!PrefsFindBool("nogui")) {
-		fprintf(stderr, "SheepShaver launch: opening preferences editor\n");
 		if (!PrefsEditor())
 			goto quit;
 	}
@@ -1046,8 +1065,10 @@ int main(int argc, char **argv)
 	// Clear caches (as we loaded and patched code) and write protect ROM
 #if !EMULATED_PPC
 	flush_icache_range(ROMBase, ROMBase + ROM_AREA_SIZE);
-#endif
 	vm_protect(ROMBaseHost, ROM_AREA_SIZE, VM_PAGE_READ | VM_PAGE_EXECUTE);
+#endif
+	// Note: With EMULATED_PPC (decode-only interpreter), the ROM must remain
+	// writable because PPC boot code writes to ROM area during initialization.
 
 	// Start 60Hz thread
 	tick_thread_cancel = false;
@@ -1092,9 +1113,34 @@ int main(int argc, char **argv)
 #endif
 
 	// Get my thread ID and execute MacOS thread function
-	emul_thread = pthread_self();
-	D(bug("MacOS thread is %ld\n", emul_thread));
-	emul_func(NULL);
+	D(bug("MacOS thread is %ld\n", pthread_self()));
+
+	// On macOS, run emul_func on a background thread so the main thread
+	// can pump Cocoa and SDL events (required for the app to stay responsive).
+	emul_func_done = false;
+
+	pthread_t emul_worker;
+	if (pthread_create(&emul_worker, NULL, emul_func_wrapper, NULL) != 0) {
+		ErrorAlert("Failed to create emulation thread");
+		goto quit;
+	}
+	emul_thread = emul_worker;
+
+	// Main thread event loop: pump SDL events while emulation runs.
+	// SDL2 (via sdl12-compat) requires SDL_PumpEvents on the main thread.
+	// Do NOT call pump_cocoa_events() here — it calls [NSApp nextEventMatchingMask:]
+	// which steals keyboard events from SDL2's queue (keyboard routes through NSApp,
+	// mouse goes through CGEventTap, which is why mouse worked but keyboard didn't).
+	// The redraw thread handles consuming events and display refresh via
+	// do_video_refresh() → handle_events().
+	while (!emul_func_done) {
+#ifdef USE_SDL_VIDEO
+		SDL_PumpEvents();
+#endif
+		Delay_usec(10000); // 10ms
+	}
+
+	pthread_join(emul_worker, NULL);
 
 quit:
 	Quit();
@@ -1108,6 +1154,19 @@ quit:
 
 static void Quit(void)
 {
+	static bool quit_in_progress = false;
+	if (quit_in_progress) return;
+	quit_in_progress = true;
+
+	// Signal main thread event loop to stop pumping SDL/Cocoa events
+	// BEFORE destroying any resources (prevents ADB/Video mutex races)
+	emul_func_done = true;
+
+	// Give main thread time to exit the event loop (it checks emul_func_done
+	// every 10ms and may be mid-handle_events when we start destroying things)
+	usleep(50000); // 50ms
+
+	fflush(stderr);
 #if EMULATED_PPC
 	// Exit PowerPC emulation
 	exit_emul_ppc();
@@ -1199,7 +1258,11 @@ static void Quit(void)
 			rpc_method_wait_for_reply(gui_connection, RPC_TYPE_INVALID);
 	}
 
-	exit(0);
+	// Use _exit() instead of exit() to skip atexit handlers. exit() triggers
+	// SDL_QuitSubSystem which tries to destroy Cocoa windows, but Quit() runs
+	// on the worker thread and AppKit window operations must only be done from
+	// the main thread. _exit() terminates cleanly without running destructors.
+	_exit(0);
 }
 
 
@@ -1224,7 +1287,6 @@ static bool direct_addressing_init(void)
 
 	VMBaseDiff = (uintptr)window;
 	natmem_window_size = kNatMemWindowSize;
-	fprintf(stderr, "SheepShaver memory: direct window host=%p size=0x%08x\n", window, natmem_window_size);
 #endif
 	return true;
 }
@@ -1545,7 +1607,9 @@ static void *tick_func(void *arg)
 				r->gpr[20], r->gpr[21], r->gpr[22], r->gpr[23],
 				r->gpr[24], r->gpr[25], r->gpr[26], r->gpr[27],
 				r->gpr[28], r->gpr[29], r->gpr[30], r->gpr[31]);
-			printf(str);
+			fprintf(stderr, "%s", str);
+			fflush(stderr);
+			printf("%s", str);
 			VideoQuitFullScreen();
 
 #ifdef ENABLE_MON

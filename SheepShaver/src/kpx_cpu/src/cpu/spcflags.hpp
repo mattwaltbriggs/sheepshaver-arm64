@@ -45,25 +45,68 @@ public:
 		{ }
 
 	void reset(uint32 v = 0)
-		{ mask = v; lock = SPIN_LOCK_UNLOCKED; }
+	{
+#if defined(__clang__) || defined(__GNUC__)
+		__atomic_store_n(&mask, v, __ATOMIC_SEQ_CST);
+#else
+		mask = v;
+#endif
+		lock = SPIN_LOCK_UNLOCKED;
+	}
 
 	bool empty() const
-		{ return (mask == 0); }
+	{
+#if defined(__clang__) || defined(__GNUC__)
+		return (__atomic_load_n(const_cast<uint32 *>(&mask), __ATOMIC_SEQ_CST) == 0);
+#else
+		return (mask == 0);
+#endif
+	}
 
 	bool test(uint32 v) const
-		{ return (mask & v); }
+	{
+#if defined(__clang__) || defined(__GNUC__)
+		return (__atomic_load_n(const_cast<uint32 *>(&mask), __ATOMIC_SEQ_CST) & v);
+#else
+		return (mask & v);
+#endif
+	}
 
 	void init(uint32 v)
-		{ spin_lock(&lock); mask = v; spin_unlock(&lock); }
+	{
+#if defined(__clang__) || defined(__GNUC__)
+		__atomic_store_n(&mask, v, __ATOMIC_SEQ_CST);
+#else
+		spin_lock(&lock); mask = v; spin_unlock(&lock);
+#endif
+	}
 
 	uint32 get() const
-		{ return mask; }
+	{
+#if defined(__clang__) || defined(__GNUC__)
+		return __atomic_load_n(const_cast<uint32 *>(&mask), __ATOMIC_SEQ_CST);
+#else
+		return mask;
+#endif
+	}
 
 	void set(uint32 v)
-		{ spin_lock(&lock); mask |= v; spin_unlock(&lock); }
+	{
+#if defined(__clang__) || defined(__GNUC__)
+		__atomic_fetch_or(&mask, v, __ATOMIC_SEQ_CST);
+#else
+		spin_lock(&lock); mask |= v; spin_unlock(&lock);
+#endif
+	}
 
 	void clear(uint32 v)
-		{ spin_lock(&lock); mask &= ~v; spin_unlock(&lock); }
+	{
+#if defined(__clang__) || defined(__GNUC__)
+		__atomic_fetch_and(&mask, ~v, __ATOMIC_SEQ_CST);
+#else
+		spin_lock(&lock); mask &= ~v; spin_unlock(&lock);
+#endif
+	}
 };
 
 #endif /* SPCFLAGS_H */

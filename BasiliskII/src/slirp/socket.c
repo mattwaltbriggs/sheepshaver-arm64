@@ -457,9 +457,8 @@ sorecvfrom(so)
 	  static int udp_recv_log_count = 0;
 	  if (udp_recv_log_count < 16) {
 	    char addrstr[INET_ADDRSTRLEN];
-	    printf("SheepShaver slirp: udp recvfrom len=%d errno=%d from=%s:%d\n",
+	    slirp_trace("udp recvfrom len=%d errno=%d from=%s:%d",
 	      rx_len, errno, inet_ntop(AF_INET, &addr.sin_addr, addrstr, sizeof(addrstr)), ntohs(addr.sin_port));
-	    fflush(stdout);
 	    udp_recv_log_count++;
 	  }
 	  DEBUG_MISC((dfd, " did recvfrom %d, errno = %d-%s\n",
@@ -538,9 +537,8 @@ sosendto(so, m)
 	char addrstr[INET_ADDRSTRLEN];
 	static int udp_send_log_count = 0;
 	if (udp_send_log_count < 16) {
-		printf("SheepShaver slirp: udp sendto len=%zu addr=%s:%d\n",
+		slirp_trace("udp sendto len=%zu addr=%s:%d",
 			m->m_len, inet_ntop(AF_INET, &addr.sin_addr, addrstr, sizeof(addrstr)), ntohs(addr.sin_port));
-		fflush(stdout);
 		udp_send_log_count++;
 	}
 	DEBUG_MISC((dfd, " sendto()ing, addr.sin_port=%d, addr.sin_addr.s_addr=%.16s\n",

@@ -41,9 +41,13 @@ bool macosx_display_alert(const char *title, const char *text, const char *first
 {
 	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 	NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+	NSString *message = title ? [NSString stringWithUTF8String:title] : @"SheepShaver";
+	NSString *informativeText = text ? [NSString stringWithUTF8String:text] : @"";
 
-	[alert setMessageText:title ? [NSString stringWithUTF8String:title] : @"SheepShaver"];
-	[alert setInformativeText:text ? [NSString stringWithUTF8String:text] : @""];
+	NSLog(@"%@: %@", message, informativeText);
+
+	[alert setMessageText:message];
+	[alert setInformativeText:informativeText];
 	[alert addButtonWithTitle:first_button ? [NSString stringWithUTF8String:first_button] : @"OK"];
 	if (second_button)
 		[alert addButtonWithTitle:[NSString stringWithUTF8String:second_button]];

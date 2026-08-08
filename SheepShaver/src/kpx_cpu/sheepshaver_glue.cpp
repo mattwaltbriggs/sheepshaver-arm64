@@ -735,23 +735,43 @@ static bool is_guest_range_within(uint32 start, uint32 length, uint32 base, uint
 static bool is_reasonable_executable_range(uint32 start, uint32 length)
 {
 	const uint32 max_executable_flush = 256 * 1024 * 1024;
-	if (length > max_executable_flush)
+	if (length == 0 || length > max_executable_flush)
 		return false;
+
+#if DIRECT_ADDRESSING && defined(NATMEM_OFFSET_VARIABLE)
+	const uint32 direct_addressing_size = 0x70000000;
+	if (is_guest_range_within(start, length, 0, direct_addressing_size))
+		return true;
+#endif
 
 	return is_guest_range_within(start, length, RAMBase, RAMSize)
 		|| is_guest_range_within(start, length, DR_EMULATOR_BASE, DR_EMULATOR_SIZE)
 		|| is_guest_range_within(start, length, DR_CACHE_BASE, DR_CACHE_SIZE);
 }
 
+static void make_executable_range(uint32 start, uint32 length)
+{
+	MakeExecutable(0, start, length);
+	// CFM fragment loading can leave stale decoded blocks outside the exact
+	// MakeExecutable range; a full PPC cache flush matches the safe behavior
+	// we observed with the flight recorder enabled.
+	ppc_cpu->invalidate_cache();
+}
+
 static void make_executable_from_guest_call(uint32 r3, uint32 r4, uint32 r5)
 {
 	// PrivateInterfaceLib MakeExecutable appears in both two- and three-argument call sites.
 	if (is_reasonable_executable_range(r4, r5))
-		MakeExecutable(0, r4, r5);
+		make_executable_range(r4, r5);
 	else if (is_reasonable_executable_range(r3, r4))
-		MakeExecutable(0, r3, r4);
+		make_executable_range(r3, r4);
 	else
 		D(bug("Ignoring MakeExecutable call with r3=%08x r4=%08x r5=%08x\n", r3, r4, r5));
+}
+
+static inline void *mac_pointer(uint32 addr)
+{
+	return addr ? Mac2HostAddr(addr) : NULL;
 }
 
 // Dump PPC registers
@@ -977,8 +997,8 @@ void TriggerInterrupt(void)
 void HandleInterrupt(powerpc_registers *r)
 {
 #ifdef USE_SDL_VIDEO
-	// We must fill in the events queue in the same thread that did call SDL_SetVideoMode()
-	SDL_PumpEvents();
+	// NOTE: SDL_PumpEvents() is now called from the main thread's event loop
+	// (required on macOS where the main thread must pump both Cocoa and SDL events)
 #endif
 
 	// Do nothing if interrupts are disabled
@@ -1098,22 +1118,22 @@ void sheepshaver_cpu::execute_native_op(uint32 selector)
 		EtherIRQ();
 		break;
 	case NATIVE_ETHER_INIT:
-		gpr(3) = InitStreamModule((void *)gpr(3));
+		gpr(3) = InitStreamModule(mac_pointer(gpr(3)));
 		break;
 	case NATIVE_ETHER_TERM:
 		TerminateStreamModule();
 		break;
 	case NATIVE_ETHER_OPEN:
-		gpr(3) = ether_open((queue_t *)gpr(3), (void *)gpr(4), gpr(5), gpr(6), (void*)gpr(7));
+		gpr(3) = ether_open((queue_t *)mac_pointer(gpr(3)), mac_pointer(gpr(4)), gpr(5), gpr(6), mac_pointer(gpr(7)));
 		break;
 	case NATIVE_ETHER_CLOSE:
-		gpr(3) = ether_close((queue_t *)gpr(3), gpr(4), (void *)gpr(5));
+		gpr(3) = ether_close((queue_t *)mac_pointer(gpr(3)), gpr(4), mac_pointer(gpr(5)));
 		break;
 	case NATIVE_ETHER_WPUT:
-		gpr(3) = ether_wput((queue_t *)gpr(3), (mblk_t *)gpr(4));
+		gpr(3) = ether_wput((queue_t *)mac_pointer(gpr(3)), (mblk_t *)mac_pointer(gpr(4)));
 		break;
 	case NATIVE_ETHER_RSRV:
-		gpr(3) = ether_rsrv((queue_t *)gpr(3));
+		gpr(3) = ether_rsrv((queue_t *)mac_pointer(gpr(3)));
 		break;
 	case NATIVE_NQD_SYNC_HOOK:
 		gpr(3) = NQD_sync_hook(gpr(3));

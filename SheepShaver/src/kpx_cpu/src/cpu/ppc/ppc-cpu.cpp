@@ -21,6 +21,7 @@
 #include "sysdeps.h"
 #include <stdlib.h>
 #include <assert.h>
+#include <time.h>
 #include "vm_alloc.h"
 #include "cpu/vm.hpp"
 #include "cpu/ppc/ppc-cpu.hpp"
@@ -63,10 +64,6 @@ int register_info_compare(const void *e1, const void *e2)
 #endif
 
 static int ppc_refcount = 0;
-
-#ifdef SHEEPSHAVER
-static inline void ppc_note_progress(const char *, uint32, uint32, uint32, uint32, uint32, int) {}
-#endif
 
 void powerpc_cpu::set_register(int id, any_register const & value)
 {
@@ -519,21 +516,16 @@ bool powerpc_cpu::check_spcflags()
 		return false;
 	}
 #ifdef SHEEPSHAVER
-	if (spcflags().test(SPCFLAG_CPU_HANDLE_INTERRUPT)) {
-		spcflags().clear(SPCFLAG_CPU_HANDLE_INTERRUPT);
-		static bool processing_interrupt = false;
-		if (!processing_interrupt) {
-			processing_interrupt = true;
-			powerpc_registers r;
-			powerpc_registers::interrupt_copy(r, regs());
-			HandleInterrupt(&r);
-			powerpc_registers::interrupt_copy(regs(), r);
-			processing_interrupt = false;
-		}
-	}
 	if (spcflags().test(SPCFLAG_CPU_TRIGGER_INTERRUPT)) {
 		spcflags().clear(SPCFLAG_CPU_TRIGGER_INTERRUPT);
 		spcflags().set(SPCFLAG_CPU_HANDLE_INTERRUPT);
+	}
+	if (spcflags().test(SPCFLAG_CPU_HANDLE_INTERRUPT)) {
+		spcflags().clear(SPCFLAG_CPU_HANDLE_INTERRUPT);
+		powerpc_registers r;
+		powerpc_registers::interrupt_copy(r, regs());
+		HandleInterrupt(&r);
+		powerpc_registers::interrupt_copy(regs(), r);
 	}
 #endif
 	if (spcflags().test(SPCFLAG_CPU_ENTER_MON)) {
@@ -634,11 +626,20 @@ void powerpc_cpu::execute(uint32 entry)
 			block_info::decode_info *di;
 			const instr_info_t *ii;
 			uint32 dpc;
+#ifdef SHEEPSHAVER
+			int block_insns;
+#endif
 			di = bi->di = decode_cache_p;
 			dpc = pc() - 4;
+#ifdef SHEEPSHAVER
+			block_insns = 0;
+#endif
 			do {
 				uint32 opcode = vm_read_memory_4(dpc += 4);
 				ii = decode(opcode);
+#ifdef SHEEPSHAVER
+				block_insns++;
+#endif
 #if PPC_EXECUTE_DUMP_STATE
 				if (dump_state) {
 					di->opcode = opcode;
@@ -671,11 +672,15 @@ void powerpc_cpu::execute(uint32 entry)
 					bi->di = decode_cache_p;
 					di = bi->di + blocklen;
 				}
-			} while ((ii->cflow & CFLOW_END_BLOCK) == 0);
-			bi->end_pc = dpc;
-			bi->min_pc = dpc;
-			bi->max_pc = entry;
-			bi->size = di - bi->di;
+#ifdef SHEEPSHAVER
+				} while ((ii->cflow & CFLOW_END_BLOCK) == 0 && block_insns < 64);
+#else
+				} while ((ii->cflow & CFLOW_END_BLOCK) == 0);
+#endif
+				bi->end_pc = dpc;
+				bi->min_pc = entry;
+				bi->max_pc = dpc;
+				bi->size = di - bi->di;
 			my_block_cache.add_to_cl_list(bi);
 			my_block_cache.add_to_active_list(bi);
 			decode_cache_p += bi->size;
@@ -689,19 +694,34 @@ void powerpc_cpu::execute(uint32 entry)
 					const int r = bi->size % 4;
 					di = bi->di + r;
 					int n = (bi->size + 3) / 4;
+#ifdef SHEEPSHAVER
+#define PPC_CHECK_DECODE_SPCFLAGS() \
+				do { \
+					if (!spcflags().empty()) { \
+						if (!check_spcflags()) \
+							goto return_site; \
+						goto pdi_dispatch_done; \
+					} \
+				} while (0)
+#else
+#define PPC_CHECK_DECODE_SPCFLAGS() do { } while (0)
+#endif
 				switch (r) {
 				case 0: do {
 						di += 4;
 						di[-4].execute(this, di[-4].opcode);
+						PPC_CHECK_DECODE_SPCFLAGS();
 				case 3: di[-3].execute(this, di[-3].opcode);
+						PPC_CHECK_DECODE_SPCFLAGS();
 				case 2: di[-2].execute(this, di[-2].opcode);
+						PPC_CHECK_DECODE_SPCFLAGS();
 				case 1: di[-1].execute(this, di[-1].opcode);
+						PPC_CHECK_DECODE_SPCFLAGS();
 						} while (--n > 0);
 					}
+			  pdi_dispatch_done:
+#undef PPC_CHECK_DECODE_SPCFLAGS
 
-#ifdef SHEEPSHAVER
-					ppc_note_progress("decode", pc(), lr(), ctr(), gpr(1), spcflags().get(), execute_depth);
-#endif
 					if (!spcflags().empty()) {
 						if (!check_spcflags())
 							goto return_site;
@@ -724,6 +744,7 @@ void powerpc_cpu::execute(uint32 entry)
 	}
 #endif
   do_interpret:
+	{
 	for (;;) {
 		uint32 opcode = vm_read_memory_4(pc());
 		const instr_info_t *ii = decode(opcode);
@@ -741,11 +762,10 @@ void powerpc_cpu::execute(uint32 entry)
 		if (dump_state)
 			dump_registers();
 #endif
-#ifdef SHEEPSHAVER
-		ppc_note_progress("interpret", pc(), lr(), ctr(), gpr(1), spcflags().get(), execute_depth);
-#endif
+
 		if (!spcflags().empty() && !check_spcflags())
 			goto return_site;
+	}
 	}
 	  return_site:
 			// Tell upper level we invalidated cache?
