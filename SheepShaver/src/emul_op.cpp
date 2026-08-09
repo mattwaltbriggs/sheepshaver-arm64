@@ -455,22 +455,25 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 		}
 
-		case OP_NTRB_17_PATCH:
-			r->a[2] = ReadMacInt32(r->a[7]);
-			r->a[7] += 4;
-			if (ReadMacInt16(r->a[2] + 6) == 17)
-				PatchNativeResourceManager();
-			break;
-
-		case OP_NTRB_17_PATCH2:
-			r->a[7] += 8;
+	case OP_NTRB_17_PATCH:
+		fprintf(stderr, "OP_NTRB_17_PATCH: ntrb=%04x\n", ReadMacInt16(r->a[2] + 6));
+		fflush(stderr);
+		r->a[2] = ReadMacInt32(r->a[7]);
+		r->a[7] += 4;
+		if (ReadMacInt16(r->a[2] + 6) == 17)
 			PatchNativeResourceManager();
-			break;
+		break;
 
-		case OP_NTRB_17_PATCH3:
-			r->a[2] = ReadMacInt32(r->a[7]);
-			r->a[7] += 4;
-		 	D(bug("%d %d\n", ReadMacInt16(r->a[2]), ReadMacInt16(r->a[2] + 6)));
+	case OP_NTRB_17_PATCH2:
+		fprintf(stderr, "OP_NTRB_17_PATCH2\n");
+		fflush(stderr);
+		r->a[7] += 8;
+		PatchNativeResourceManager();
+		break;
+
+	case OP_NTRB_17_PATCH3:
+		fprintf(stderr, "OP_NTRB_17_PATCH3: ntrb=%04x id=%04x\n", ReadMacInt16(r->a[2]), ReadMacInt16(r->a[2] + 6));
+		fflush(stderr);
 			if (ReadMacInt16(r->a[2]) == 11 && ReadMacInt16(r->a[2] + 6) == 17)
 				PatchNativeResourceManager();
 			break;

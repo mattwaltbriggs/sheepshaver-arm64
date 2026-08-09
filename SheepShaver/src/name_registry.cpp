@@ -358,6 +358,25 @@ void DoPatchNameRegistry(void)
 			// local-mac-address
 			// max-frame-size 2048
 		}
+
+		// Create "sound" - NewWorld 1.2.1 ROMs (iMac G3) need this in the Name Registry
+		// so the Sound Manager knows audio hardware exists. Without this entry, the ROM's
+		// OpenFirmware DAVAudio driver fails to init AWACS hardware and the Sound Manager
+		// never activates the output device.
+		SheepRegEntryID sound;
+		printf("SheepShaver registry: creating sound entry\n");
+		fflush(stdout);
+		if (!RegistryCStrEntryCreate(device_tree.addr(), "sound", sound.addr())) {
+			RegistryPropertyCreateStr(sound.addr(), "device_type", "sound");
+			RegistryPropertyCreateStr(sound.addr(), "compatible", "awacs");
+			RegistryPropertyCreateStr(sound.addr(), "model", "SheepShaver Audio");
+			// Register reg property: AWACS base address and size
+			// These match the iMac G3's OpenFirmware device tree
+			SheepPair reg(0x80016000, 0x1000);
+			RegistryPropertyCreate(sound.addr(), "reg", reg.addr(), 8);
+			printf("SheepShaver registry: sound entry created\n");
+			fflush(stdout);
+		}
 	}
 	D(bug("done.\n"));
 	printf("SheepShaver registry: DoPatchNameRegistry done\n");

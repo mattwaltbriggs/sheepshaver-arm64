@@ -114,8 +114,13 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 {
 	uint16 *p16;
 	uint32 base;
-	D(bug("vCheckLoad %c%c%c%c (%08x) ID %d, data %p, size %d\n", type >> 24, (type >> 16) & 0xff, (type >> 8) & 0xff, type & 0xff, type, id, p, size));
-
+	static int checkload_count = 0;
+	checkload_count++;
+	if (checkload_count <= 5 || (checkload_count & 0xff) == 0) {
+		fprintf(stderr, "CheckLoad[%d]: %.4s id=%d size=%d rom=%d\n", checkload_count, (const char*)&type, id, size,
+			((uintptr)p >= (uintptr)ROMBaseHost && (uintptr)p <= (uintptr)(ROMBaseHost + ROM_SIZE)) ? 1 : 0);
+		fflush(stderr);
+	}
 	// Don't modify resources in ROM
 	if ((uintptr)p >= (uintptr)ROMBaseHost && (uintptr)p <= (uintptr)(ROMBaseHost + ROM_SIZE))
 		return;
@@ -488,10 +493,13 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 		// Collect info about used audio sifters
 		uint32 thing = Host2MacAddr((uint8 *)p);
 		uint32 c_type = ReadMacInt32(thing);
-		uint32 sub_type = ReadMacInt32(thing + 4);
-		if (c_type == FOURCC('s','d','e','v') && sub_type == FOURCC('s','i','n','g')) {
+		uint32 c_subtype = ReadMacInt32(thing + 4);
+		// Standard sdev/sing (classic Mac) or walk/snd (NewWorld CHRP)
+		if ((c_type == FOURCC('s','d','e','v') && c_subtype == FOURCC('s','i','n','g'))
+			|| (c_type == FOURCC('w','a','l','k') && c_subtype == FOURCC('s','n','d',' '))) {
+			fprintf(stderr, "CheckLoad: found audio output thng id=%d type=%.4s subtype=%.4s\n", id, (const char*)&c_type, (const char*)&c_subtype);
+			fflush(stderr);
 			WriteMacInt32(thing + 4, FOURCC('a','w','g','c'));
-			D(bug("thng %d, type %c%c%c%c (%08x), sub type %c%c%c%c (%08x), data %p\n", id, c_type >> 24, (c_type >> 16) & 0xff, (c_type >> 8) & 0xff, c_type & 0xff, c_type, sub_type >> 24, (sub_type >> 16) & 0xff, (sub_type >> 8) & 0xff, sub_type & 0xff, sub_type, p));
 			AddSifter(ReadMacInt32(thing + componentResType), ReadMacInt16(thing + componentResID));
 			if (ReadMacInt32(thing + componentPFCount))
 				AddSifter(ReadMacInt32(thing + componentPFResType), ReadMacInt16(thing + componentPFResID));
@@ -500,7 +508,8 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 	} else if (type == FOURCC('s','i','f','t') || type == FOURCC('n','i','f','t')) {
 		// Patch audio sifters
 		if (FindSifter(type, id)) {
-			D(bug("sifter found\n"));
+			fprintf(stderr, "CheckLoad: patching sift/nift id=%d\n", id);
+			fflush(stderr);
 			p[0] = htons(0x4e56); p[1] = htons(0x0000);		// link a6,#0
 			p[2] = htons(0x48e7); p[3] = htons(0x8018);		// movem.l d0/a3-a4,-(a7)
 			p[4] = htons(0x266e); p[5] = htons(0x000c);		// movea.l $c(a6),a3
@@ -511,6 +520,22 @@ void CheckLoad(uint32 type, int16 id, uint16 *p, uint32 size)
 			p[13] = htons(0x4e5e);							// unlk a6
 			p[14] = htons(0x4e74); p[15] = htons(0x0008);	// rtd #8
 			D(bug(" patch applied\n"));
+		}
+
+	} else if (type == FOURCC('C','O','D','E') || type == FOURCC('s','n','d',' ')) {
+		// Also patch CODE/snd resources that match sifters (for NewWorld walk/snd thngs)
+		if (FindSifter(type, id)) {
+			fprintf(stderr, "CheckLoad: patching CODE/snd id=%d\n", id);
+			fflush(stderr);
+			p[0] = htons(0x4e56); p[1] = htons(0x0000);		// link a6,#0
+			p[2] = htons(0x48e7); p[3] = htons(0x8018);		// movem.l d0/a3-a4,-(a7)
+			p[4] = htons(0x266e); p[5] = htons(0x000c);		// movea.l $c(a6),a3
+			p[6] = htons(0x286e); p[7] = htons(0x0008);		// movea.l $8(a6),a4
+			p[8] = htons(M68K_EMUL_OP_AUDIO_DISPATCH);
+			p[9] = htons(0x2d40); p[10] = htons(0x0010);	// move.l d0,$10(a6)
+			p[11] = htons(0x4cdf); p[12] = htons(0x1801);	// movem.l (a7)+,d0/a3-a4
+			p[13] = htons(0x4e5e);							// unlk a6
+			p[14] = htons(0x4e74); p[15] = htons(0x0008);	// rtd #8
 		}
 
 	} else if (type == FOURCC('D','R','V','R') && (id == -16501 || id == -16500)) {
@@ -921,10 +946,13 @@ extern "C" void get_1_named_resource(void);
 
 void PatchNativeResourceManager(void)
 {
-	D(bug("PatchNativeResourceManager\n"));
+	fprintf(stderr, "PatchNativeResourceManager called\n");
+	fflush(stderr);
 
 	// Patch native GetResource()
 	uint32 upp = ReadMacInt32(0x1480);
+	fprintf(stderr, "  GetResource UPP at 0x1480 = %08x, ROMBase = %08x\n", upp, ROMBase);
+	fflush(stderr);
 	if ((upp & 0xffc00000) == ROMBase)
 		return;
 	uint32 tvec = ReadMacInt32(upp + 5 * 4);

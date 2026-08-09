@@ -68,7 +68,7 @@ void AudioReset(void)
 
 static int32 AudioGetInfo(uint32 infoPtr, uint32 selector, uint32 sourceID)
 {
-	D(bug(" AudioGetInfo %c%c%c%c, infoPtr %08lx, source ID %08lx\n", selector >> 24, (selector >> 16) & 0xff, (selector >> 8) & 0xff, selector & 0xff, infoPtr, sourceID));
+	fprintf(stderr, "AudioGetInfo selector=%08x (%c%c%c%c) infoPtr=%08lx sourceID=%08lx\n", selector, (int)(selector>>24)&0xff, (int)(selector>>16)&0xff, (int)(selector>>8)&0xff, (int)selector&0xff, infoPtr, sourceID);
 	M68kRegisters r;
 
 	switch (selector) {
@@ -183,7 +183,7 @@ static int32 AudioGetInfo(uint32 infoPtr, uint32 selector, uint32 sourceID)
 
 static int32 AudioSetInfo(uint32 infoPtr, uint32 selector, uint32 sourceID)
 {
-	D(bug(" AudioSetInfo %c%c%c%c, infoPtr %08lx, source ID %08lx\n", selector >> 24, (selector >> 16) & 0xff, (selector >> 8) & 0xff, selector & 0xff, infoPtr, sourceID));
+	fprintf(stderr, "AudioSetInfo selector=%08x (%c%c%c%c) infoPtr=%08lx sourceID=%08lx\n", selector, (int)(selector>>24)&0xff, (int)(selector>>16)&0xff, (int)(selector>>8)&0xff, (int)selector&0xff, infoPtr, sourceID);
 	M68kRegisters r;
 
 	switch (selector) {
@@ -275,6 +275,10 @@ int32 AudioDispatch(uint32 params, uint32 globals)
 	M68kRegisters r;
 	uint32 p = params + cp_params;
 	int16 selector = (int16)ReadMacInt16(params + cp_what);
+
+	static int dispatch_count = 0;
+	dispatch_count++;
+	fprintf(stderr, "AudioDispatch #%d: selector=0x%04x params=%08lx\n", dispatch_count, selector, params);
 
 	switch (selector) {
 
@@ -392,17 +396,52 @@ int32 AudioDispatch(uint32 params, uint32 globals)
 			if (open_count == 0)
 				audio_enter_stream();
 			open_count++;
+
+			// On NewWorld 1.2.1 ROMs (iMac G3), the ROM's OpenFirmware sound
+			// driver (DAVAudio) fails to init AWACS hardware during boot because
+			// there's no real hardware. The ROM never calls InitOutputDevice via
+			// the normal thng resource path. Auto-initialize on first open.
+			if (audio_open && !AudioStatus.mixer && audio_data) {
+				fprintf(stderr, "AudioDispatch: auto-calling InitOutputDevice on first open\n");
+				// Init sound component data
+				WriteMacInt32(audio_data + adatData + scd_flags, 0);
+				WriteMacInt32(audio_data + adatData + scd_format, AudioStatus.sample_size == 16 ? FOURCC('t','w','o','s') : FOURCC('r','a','w',' '));
+				WriteMacInt16(audio_data + adatData + scd_numChannels, AudioStatus.channels);
+				WriteMacInt16(audio_data + adatData + scd_sampleSize, AudioStatus.sample_size);
+				WriteMacInt32(audio_data + adatData + scd_sampleRate, AudioStatus.sample_rate);
+				WriteMacInt32(audio_data + adatData + scd_sampleCount, audio_frames_per_block);
+				WriteMacInt32(audio_data + adatData + scd_buffer, 0);
+				WriteMacInt32(audio_data + adatData + scd_reserved, 0);
+				WriteMacInt32(audio_data + adatStreamInfo, 0);
+				// Open Apple Mixer
+				r.a[0] = audio_data + adatMixer;
+				r.d[0] = 0;
+				r.a[1] = audio_data + adatData;
+				Execute68k(audio_data + adatOpenMixer, &r);
+				AudioStatus.mixer = ReadMacInt32(audio_data + adatMixer);
+				fprintf(stderr, "AudioDispatch: auto InitOutputDevice OpenMixer() returns %08x, mixer=%08x\n", (uint32)r.d[0], (uint32)AudioStatus.mixer);
+			}
 			return noErr;
 
 adat_error:	printf("FATAL: audio component data block initialization error\n");
 			QuitEmulator();
 			return openErr;
 
-		case kComponentCloseSelect:
-			open_count--;
-			if (open_count == 0) {
+	case kComponentCloseSelect:
+		open_count--;
+		fprintf(stderr, "AudioDispatch Close: open_count=%d audio_data=%08lx mixer=%08lx audio_open=%d\n", open_count, audio_data, AudioStatus.mixer, audio_open);
+		if (open_count == 0) {
 				if (audio_data) {
 					if (AudioStatus.mixer) {
+						// Don't close the mixer on NewWorld ROMs where InitOutputDevice
+						// is never called by the ROM. The mixer was auto-initialized
+						// and must stay alive for applications to use.
+						// Only close it if we're shutting down (audio_open == false).
+						if (audio_open) {
+							fprintf(stderr, "AudioDispatch: keeping mixer alive (audio_open=%d)\n", audio_open);
+							AudioStatus.num_sources = 0;
+							return noErr;
+						}
 						// Close Apple Mixer
 						r.a[0] = AudioStatus.mixer;
 						Execute68k(audio_data + adatCloseMixer, &r);
@@ -438,12 +477,14 @@ adat_error:	printf("FATAL: audio component data block initialization error\n");
 		case kComponentVersionSelect:
 			return 0x00010003;
 
-		case kComponentRegisterSelect:
-			return noErr;
+	case kComponentRegisterSelect:
+		fprintf(stderr, "AudioDispatch: RegisterSelect called\n");
+		return noErr;
 
 		// Sound component functions (not delegated)
 		case kSoundComponentInitOutputDeviceSelect:
 			D(bug(" InitOutputDevice\n"));
+			fprintf(stderr, "AudioDispatch: InitOutputDevice audio_open=%d mixer=%08lx\n", audio_open, AudioStatus.mixer);
 			if (!audio_open)
 				return noHardwareErr;
 			if (AudioStatus.mixer)

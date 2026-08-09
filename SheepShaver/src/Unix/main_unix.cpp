@@ -1276,7 +1276,7 @@ static bool direct_addressing_init(void)
 	if (natmem_window_size != 0)
 		return true;
 
-	static const uint32 kNatMemWindowSize = 0x70000000U;
+	static const uint32 kNatMemWindowSize = 0x90000000U;
 	uint8 *window = (uint8 *)vm_acquire(kNatMemWindowSize);
 	if (window == VM_MAP_FAILED) {
 		char str[256];
@@ -1287,6 +1287,30 @@ static bool direct_addressing_init(void)
 
 	VMBaseDiff = (uintptr)window;
 	natmem_window_size = kNatMemWindowSize;
+
+	// Fill AWACS/DavBus hardware register area with plausible values
+	// so the OF DAVAudio driver's hardware probe succeeds during boot.
+	// DavBus (I2S bus) at 0x80016000, AWACS codec at 0x80017000
+	{
+		volatile uint32 *davbus = (volatile uint32 *)(window + 0x80016000);
+		volatile uint32 *awacs = (volatile uint32 *)(window + 0x80017000);
+		// DavBus I2S registers - non-zero values indicate bus present
+		davbus[0] = 0x00010000;  // I2S control/status
+		davbus[1] = 0x00000001;  // I2S mode
+		davbus[2] = 0x00000003;  // I2S frame format
+		davbus[3] = 0x00000001;  // I2S clock source
+		// AWACS codec registers - non-zero values indicate codec present
+		awacs[0] = 0x00010000;  // Codec ID / revision
+		awacs[1] = 0x00000000;  // Codec status (ready)
+		awacs[2] = 0x00010001;  // Codec control (enable)
+		awacs[3] = 0x00000000;  // Reserved
+		awacs[4] = 0x00000000;  // Volume L
+		awacs[5] = 0x00000000;  // Volume R
+		awacs[6] = 0x00000000;  // Reserved
+		awacs[7] = 0x00000000;  // Reserved
+		printf("SheepShaver: AWACS/DavBus registers initialized at 0x80016000\n");
+		fflush(stdout);
+	}
 #endif
 	return true;
 }
