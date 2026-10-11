@@ -287,6 +287,14 @@ extern "C" void pump_cocoa_events(void);
 static volatile bool emul_func_done = false;
 static void *emul_func_wrapper(void *arg)
 {
+#if EMULATED_PPC
+	// Mach exception ports are per-thread. install_signal_handlers() bound
+	// the SIGSEGV/BAD_ACCESS port to the main thread, but the CPU emulator
+	// runs here on a worker thread, so bind this thread to the same port as
+	// well. Without this, guest accesses to device addresses (e.g. the
+	// NewWorld ROM 0xf30xxxxx range) fault uncaught and crash the process.
+	sigsegv_install_handler(sigsegv_handler);
+#endif
 	void *result = emul_func(arg);
 	emul_func_done = true;
 	return result;
@@ -1288,28 +1296,73 @@ static bool direct_addressing_init(void)
 	VMBaseDiff = (uintptr)window;
 	natmem_window_size = kNatMemWindowSize;
 
-	// Fill AWACS/DavBus hardware register area with plausible values
-	// so the OF DAVAudio driver's hardware probe succeeds during boot.
-	// DavBus (I2S bus) at 0x80016000, AWACS codec at 0x80017000
+	// Initialize the AWACS/Screamer hardware register area.
+	// On real NewWorld Macs, the entire Screamer chip is in a single 0x1000
+	// memory-mapped region. The Name Registry entry says reg=(0x80016000, 0x1000).
+	//
+	// QEMU's Screamer implementation uses addr>>4 for register indexing:
+	//   Offset 0x00: SND_CTRL_REG (I2S sound control)
+	//   Offset 0x10: CODEC_CTRL_REG (codec control - write selects AWACS register)
+	//   Offset 0x20: CODEC_STAT_REG (codec status - read returns AWACS register value)
+	//   Offset 0x30: CLIP_CNT_REG
+	//   Offset 0x40: BYTE_SWAP_REG
+	//   Offset 0x50: FRAME_CNT_REG
+	//
+	// The AWACS codec registers are accessed INDIRECTLY: write to CODEC_CTRL_REG
+	// selects which internal AWACS register to access, then read CODEC_STAT_REG
+	// returns its value. With flat memory we can't do true indirect access, but
+	// we set the initial CODEC_STAT_REG to the Crystal/AWACS status that the
+	// davbus DRVR and OF DAVAudio probe expects to see.
 	{
-		volatile uint32 *davbus = (volatile uint32 *)(window + 0x80016000);
-		volatile uint32 *awacs = (volatile uint32 *)(window + 0x80017000);
-		// DavBus I2S registers - non-zero values indicate bus present
-		davbus[0] = 0x00010000;  // I2S control/status
-		davbus[1] = 0x00000001;  // I2S mode
-		davbus[2] = 0x00000003;  // I2S frame format
-		davbus[3] = 0x00000001;  // I2S clock source
-		// AWACS codec registers - non-zero values indicate codec present
-		awacs[0] = 0x00010000;  // Codec ID / revision
-		awacs[1] = 0x00000000;  // Codec status (ready)
-		awacs[2] = 0x00010001;  // Codec control (enable)
-		awacs[3] = 0x00000000;  // Reserved
-		awacs[4] = 0x00000000;  // Volume L
-		awacs[5] = 0x00000000;  // Volume R
-		awacs[6] = 0x00000000;  // Reserved
-		awacs[7] = 0x00000000;  // Reserved
-		printf("SheepShaver: AWACS/DavBus registers initialized at 0x80016000\n");
-		fflush(stdout);
+		volatile uint8 *screamer = window + 0x80016000;
+
+		// SND_CTRL_REG (offset 0x00) - I2S control: enable audio, set rate
+		// Bits [10:8] = basic rate select (0 = 44100 Hz)
+		volatile uint32 *snd_ctrl = (volatile uint32 *)(screamer + 0x00);
+		*snd_ctrl = 0x00000000;  // Default: no special config needed
+
+		// CODEC_CTRL_REG (offset 0x10) - codec control register
+		// Written by driver to select which AWACS register to access
+		volatile uint32 *codec_ctrl = (volatile uint32 *)(screamer + 0x10);
+		*codec_ctrl = 0x00000000;
+
+		// CODEC_STAT_REG (offset 0x20) - codec status register
+		// When read without read-back mode, QEMU returns:
+		//   CODEC_STAT_MANUFACTURER_CRYSTAL (0x100)
+		//   CODEC_STAT_AWACS_REVISION      (0x3000)
+		//   CODEC_STAT_MASK_VALID           (1 << 22 = 0x400000)
+		// = 0x00403100
+		// This tells the davbus DRVR that a Crystal/AWACS codec is present.
+		volatile uint32 *codec_stat = (volatile uint32 *)(screamer + 0x20);
+		*codec_stat = 0x00403100;
+
+		// CLIP_CNT_REG (offset 0x30)
+		volatile uint32 *clip_cnt = (volatile uint32 *)(screamer + 0x30);
+		*clip_cnt = 0x00000000;
+
+		// BYTE_SWAP_REG (offset 0x40)
+		volatile uint32 *byte_swap = (volatile uint32 *)(screamer + 0x40);
+		*byte_swap = 0x00000000;
+
+		// FRAME_CNT_REG (offset 0x50)
+		volatile uint32 *frame_cnt = (volatile uint32 *)(screamer + 0x50);
+		*frame_cnt = 0x00000000;
+
+		// Initialize AWACS shadow registers (accessed indirectly via CODEC_CTRL/STAT)
+		// These are the internal AWACS codec register values.
+		// codec_ctrl_regs[0] = unknown reg, default 0
+		// codec_ctrl_regs[1] = control 1 (mute bit 7) = 0x00 (not muted)
+		// codec_ctrl_regs[2] = control 2 = 0x00
+		// codec_ctrl_regs[3] = control 3 = 0x00
+		// codec_ctrl_regs[4] = attenuation L/R = 0x00 (full volume)
+		// codec_ctrl_regs[5] = DAC control = 0x00
+		// codec_ctrl_regs[6] = ADC control = 0x00
+		// codec_ctrl_regs[7] = read-back control = 0x00 (no read-back mode)
+
+		// Zero out remaining region
+		volatile uint32 *rest = (volatile uint32 *)(screamer + 0x60);
+		for (int i = 0; i < 0x9A0/4; i++)
+			rest[i] = 0x00000000;
 	}
 #endif
 	return true;

@@ -95,8 +95,6 @@ static bool open_sdl_audio(void)
 	audio_spec.userdata = NULL;
 
 	// Open the audio device, forcing the desired format
-	fprintf(stderr, "open_sdl_audio: freq=%d format=0x%x channels=%d samples=%d\n",
-		audio_spec.freq, audio_spec.format, audio_spec.channels, audio_spec.samples);
 	if (SDL_OpenAudio(&audio_spec, NULL) < 0) {
 		fprintf(stderr, "WARNING: Cannot open audio: %s\n", SDL_GetError());
 		return false;
@@ -151,7 +149,6 @@ static bool open_audio(void)
 
 void AudioInit(void)
 {
-	fprintf(stderr, "AudioInit: called\n");
 	// Init audio status and feature flags
 	AudioStatus.sample_rate = 44100 << 16;
 	AudioStatus.sample_size = 16;
@@ -161,18 +158,14 @@ void AudioInit(void)
 	audio_component_flags = cmpWantsRegisterMessage | kStereoOut | k16BitOut;
 
 	// Sound disabled in prefs? Then do nothing
-	if (PrefsFindBool("nosound")) {
-		fprintf(stderr, "AudioInit: nosound=true, skipping\n");
+	if (PrefsFindBool("nosound"))
 		return;
-	}
 
 	// Init semaphore
 	audio_irq_done_sem = SDL_CreateSemaphore(0);
 
 	// Open and initialize audio device
-	fprintf(stderr, "AudioInit: opening audio device\n");
 	open_audio();
-	fprintf(stderr, "AudioInit: done, audio_open=%d\n", audio_open);
 }
 
 
@@ -222,18 +215,16 @@ void audio_exit_stream()
  *  Streaming function
  */
 
-static int stream_call_count = 0;
-static uint32 last_stream_time = 0;
 static void stream_func(void *arg, uint8 *stream, int stream_len)
 {
-	stream_call_count++;
 	if (AudioStatus.num_sources) {
-		if (stream_call_count <= 5 || (stream_call_count % 1000) == 0)
-			fprintf(stderr, "stream_func: #%d num_sources=%d, triggering irq\n", stream_call_count, AudioStatus.num_sources);
 		// Trigger audio interrupt to get new buffer
+		D(bug("stream: triggering irq\n"));
 		SetInterruptFlag(INTFLAG_AUDIO);
 		TriggerInterrupt();
+		D(bug("stream: waiting for ack\n"));
 		SDL_SemWait(audio_irq_done_sem);
+		D(bug("stream: ack received\n"));
 
 		// Get size of audio data
 		uint32 apple_stream_info = ReadMacInt32(audio_data + adatStreamInfo);
@@ -258,9 +249,6 @@ static void stream_func(void *arg, uint8 *stream, int stream_len)
 	} else {
 
 		// Audio not active, play silence
-		if (stream_call_count < 5)
-			fprintf(stderr, "stream_func: num_sources=0, playing silence\n");
-		stream_call_count++;
 silence: memset(stream, silence_byte, stream_len);
 	}
 #if defined(BINCUE)

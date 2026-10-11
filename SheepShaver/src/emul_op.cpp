@@ -190,7 +190,7 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 
 		case OP_AUDIO_DISPATCH:		// Audio component functions
-			r->d[0] = AudioDispatch(r->a[3], r->a[4]);
+			r->d[0] = AudioDispatch(r->a[3], r->a[1]);
 			break;
 
 		case OP_SOUNDIN_OPEN:		// Sound input driver functions
@@ -253,15 +253,9 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 
 			case OP_INSTALL_DRIVERS: {	// Patch to install our own drivers during startup
 				// Install drivers
-				printf("SheepShaver boot: OP_INSTALL_DRIVERS begin\n");
-				fflush(stdout);
 				InstallDrivers();
-				printf("SheepShaver boot: OP_INSTALL_DRIVERS InstallDrivers done\n");
-				fflush(stdout);
 
 				// Patch MakeExecutable()
-				printf("SheepShaver boot: OP_INSTALL_DRIVERS patch MakeExecutable\n");
-				fflush(stdout);
 				MakeExecutableTvec = FindLibSymbol("\023PrivateInterfaceLib", "\016MakeExecutable");
 				D(bug("MakeExecutable TVECT at %08x\n", MakeExecutableTvec));
 				WriteMacInt32(MakeExecutableTvec, NativeFunction(NATIVE_MAKE_EXECUTABLE));
@@ -277,21 +271,13 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			};
 				BUILD_SHEEPSHAVER_PROCEDURE(proc);
 				WriteMacInt32(0x1dfc, proc);
-				printf("SheepShaver boot: OP_INSTALL_DRIVERS done\n");
-				fflush(stdout);
 				break;
 			}
 
 			case OP_NAME_REGISTRY:		// Patch Name Registry and initialize CallUniversalProc
-				printf("SheepShaver boot: OP_NAME_REGISTRY begin\n");
-				fflush(stdout);
 				r->d[0] = (uint32)-1;
 				PatchNameRegistry();
-				printf("SheepShaver boot: OP_NAME_REGISTRY PatchNameRegistry done\n");
-				fflush(stdout);
 				InitCallUniversalProc();
-				printf("SheepShaver boot: OP_NAME_REGISTRY done\n");
-				fflush(stdout);
 				break;
 
 		case OP_RESET:				// Early in MacOS reset
@@ -313,27 +299,10 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			}
 			break;
 
-		case OP_IRQ: {			// Level 1 interrupt
+		case OP_IRQ:			// Level 1 interrupt
 			WriteMacInt16(ReadMacInt32(KernelDataAddr + 0x67c), 0);	// Clear interrupt
 			r->d[0] = 0;
-			static uint64 op_irq_count = 0;
-			static bool op_irq_mac_started_logged = false;
-			op_irq_count++;
-			const bool mac_started = HasMacStarted();
-			if (mac_started && !op_irq_mac_started_logged) {
-				fprintf(stderr,
-				        "SheepShaver boot: OP_IRQ sees Mac started count=%llu cfc=0x%08x flags=0x%08x\n",
-				        (unsigned long long)op_irq_count,
-				        ReadMacInt32(0xcfc), InterruptFlags);
-				op_irq_mac_started_logged = true;
-			}
-			if (op_irq_count <= 5 || (op_irq_count & 0xff) == 0)
-				fprintf(stderr,
-				        "SheepShaver irq: OP_IRQ count=%llu mac_started=%s flags=0x%08x cfc=0x%08x\n",
-				        (unsigned long long)op_irq_count,
-				        mac_started ? "true" : "false",
-				        InterruptFlags, ReadMacInt32(0xcfc));
-			if (mac_started) {
+			if (HasMacStarted()) {
 				if (InterruptFlags & INTFLAG_VIA) {
 					ClearInterruptFlag(INTFLAG_VIA);
 #if !PRECISE_TIMING
@@ -374,7 +343,6 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			} else
 				r->d[0] = 1;
 			break;
-		}
 
 		case OP_SCSI_DISPATCH: {	// SCSIDispatch() replacement
 			uint32 ret = ReadMacInt32(r->a[7]);
@@ -455,25 +423,21 @@ void EmulOp(M68kRegisters *r, uint32 pc, int selector)
 			break;
 		}
 
-	case OP_NTRB_17_PATCH:
-		fprintf(stderr, "OP_NTRB_17_PATCH: ntrb=%04x\n", ReadMacInt16(r->a[2] + 6));
-		fflush(stderr);
-		r->a[2] = ReadMacInt32(r->a[7]);
-		r->a[7] += 4;
-		if (ReadMacInt16(r->a[2] + 6) == 17)
+		case OP_NTRB_17_PATCH:
+			r->a[2] = ReadMacInt32(r->a[7]);
+			r->a[7] += 4;
+			if (ReadMacInt16(r->a[2] + 6) == 17)
+				PatchNativeResourceManager();
+			break;
+
+		case OP_NTRB_17_PATCH2:
+			r->a[7] += 8;
 			PatchNativeResourceManager();
-		break;
+			break;
 
-	case OP_NTRB_17_PATCH2:
-		fprintf(stderr, "OP_NTRB_17_PATCH2\n");
-		fflush(stderr);
-		r->a[7] += 8;
-		PatchNativeResourceManager();
-		break;
-
-	case OP_NTRB_17_PATCH3:
-		fprintf(stderr, "OP_NTRB_17_PATCH3: ntrb=%04x id=%04x\n", ReadMacInt16(r->a[2]), ReadMacInt16(r->a[2] + 6));
-		fflush(stderr);
+		case OP_NTRB_17_PATCH3:
+			r->a[2] = ReadMacInt32(r->a[7]);
+			r->a[7] += 4;
 			if (ReadMacInt16(r->a[2]) == 11 && ReadMacInt16(r->a[2] + 6) == 17)
 				PatchNativeResourceManager();
 			break;

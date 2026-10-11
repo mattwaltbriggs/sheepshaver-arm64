@@ -664,6 +664,19 @@ extern kern_return_t mach_exception_raise_state_identity(mach_port_t, mach_port_
 	thread_state_t, mach_msg_type_number_t, thread_state_t, mach_msg_type_number_t *);
 }
 
+// libSystem's exc_server no longer dispatches to the user-provided
+// catch_exception_raise on modern macOS/arm64: it routes to its internal
+// _Xexception_raise stub which aborts the process. Bundle the MIG-generated
+// server so that mach_exc_server() calls our catch_mach_exception_raise()
+// directly. The C sources are wrapped in extern "C" since we are inside a
+// .cpp translation unit.
+#ifdef HAVE_MACH64_VM
+extern "C" {
+#include "mach_excServer.c"
+#include "mach_excUser.c"
+}
+#endif
+
 // Could make this dynamic by looking for a result of MIG_ARRAY_TOO_LARGE
 #define HANDLER_COUNT 64
 
@@ -2950,6 +2963,18 @@ static bool sigsegv_do_install_handler(sigsegv_fault_handler_t handler)
 	 */
 #if defined(__APPLE__) && defined(__MACH__)
 	if (sigsegv_fault_handler != NULL) {
+		// The exception port and handler thread are already set up. Mach
+		// exception ports are per-thread, so bind the current thread to our
+		// port as well. This is required when the CPU emulator runs on a
+		// worker thread distinct from the one that installed the handler.
+		kern_return_t krc = thread_set_exception_ports(mach_thread_self(),
+					EXC_MASK_BAD_ACCESS, _exceptionPort,
+					EXCEPTION_DEFAULT | MACH_EXCEPTION_CODES,
+					SIGSEGV_THREAD_STATE_FLAVOR);
+		if (krc != KERN_SUCCESS) {
+			mach_error("thread_set_exception_ports", krc);
+			return false;
+		}
 		sigsegv_fault_handler = handler;
 		return true;
 	}

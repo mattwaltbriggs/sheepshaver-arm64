@@ -86,14 +86,10 @@ void DoPatchNameRegistry(void)
 {
 	SheepVar32 u32;
 	D(bug("Patching Name Registry..."));
-	printf("SheepShaver registry: DoPatchNameRegistry begin ethernet_driver_size=%lu\n", (unsigned long)sizeof(ethernet_driver));
-	fflush(stdout);
 
 	// Create "device-tree"
 	SheepRegEntryID device_tree;
 	if (!RegistryCStrEntryCreate(0, "Devices:device-tree", device_tree.addr())) {
-		printf("SheepShaver registry: device-tree created\n");
-		fflush(stdout);
 		u32.set_value(BusClockSpeed);
 		RegistryPropertyCreate(device_tree.addr(), "clock-frequency", u32.addr(), 4);
 		RegistryPropertyCreateStr(device_tree.addr(), "model", "Power Macintosh");
@@ -343,66 +339,31 @@ void DoPatchNameRegistry(void)
 
 		// Create "ethernet"
 		SheepRegEntryID ethernet;
-		printf("SheepShaver registry: creating ethernet entry\n");
-		fflush(stdout);
 		if (!RegistryCStrEntryCreate(device_tree.addr(), "ethernet", ethernet.addr())) {
-			printf("SheepShaver registry: ethernet entry created, publishing ndrv size=%lu\n", (unsigned long)sizeof(ethernet_driver));
-			fflush(stdout);
 			RegistryPropertyCreateStr(ethernet.addr(), "AAPL,connector", "ethernet");
 			RegistryPropertyCreateStr(ethernet.addr(), "device_type", "network");
 			SheepArray<sizeof(ethernet_driver)> the_ethernet_driver;
 			Host2Mac_memcpy(the_ethernet_driver.addr(), ethernet_driver, sizeof(ethernet_driver));
 			RegistryPropertyCreate(ethernet.addr(), "driver,AAPL,MacOS,PowerPC", the_ethernet_driver.addr(), sizeof(ethernet_driver));
-			printf("SheepShaver registry: ethernet ndrv published\n");
-			fflush(stdout);
 			// local-mac-address
 			// max-frame-size 2048
 		}
-
-		// Create "sound" - NewWorld 1.2.1 ROMs (iMac G3) need this in the Name Registry
-		// so the Sound Manager knows audio hardware exists. Without this entry, the ROM's
-		// OpenFirmware DAVAudio driver fails to init AWACS hardware and the Sound Manager
-		// never activates the output device.
-		SheepRegEntryID sound;
-		printf("SheepShaver registry: creating sound entry\n");
-		fflush(stdout);
-		if (!RegistryCStrEntryCreate(device_tree.addr(), "sound", sound.addr())) {
-			RegistryPropertyCreateStr(sound.addr(), "device_type", "sound");
-			RegistryPropertyCreateStr(sound.addr(), "compatible", "awacs");
-			RegistryPropertyCreateStr(sound.addr(), "model", "SheepShaver Audio");
-			// Register reg property: AWACS base address and size
-			// These match the iMac G3's OpenFirmware device tree
-			SheepPair reg(0x80016000, 0x1000);
-			RegistryPropertyCreate(sound.addr(), "reg", reg.addr(), 8);
-			printf("SheepShaver registry: sound entry created\n");
-			fflush(stdout);
-		}
 	}
 	D(bug("done.\n"));
-	printf("SheepShaver registry: DoPatchNameRegistry done\n");
-	fflush(stdout);
 }
 
 void PatchNameRegistry(void)
 {
-	printf("SheepShaver registry: PatchNameRegistry begin\n");
-	fflush(stdout);
 	// Find RegistryCStrEntryCreate() and RegistryPropertyCreate() TVECTs
 	rcec_tvect = FindLibSymbol("\017NameRegistryLib", "\027RegistryCStrEntryCreate");
 	D(bug("RegistryCStrEntryCreate TVECT at %08x\n", rcec_tvect));
 	rpc_tvect = FindLibSymbol("\017NameRegistryLib", "\026RegistryPropertyCreate");
 	D(bug("RegistryPropertyCreate TVECT at %08x\n", rpc_tvect));
-	printf("SheepShaver registry: TVECTs rcec=0x%08x rpc=0x%08x\n", rcec_tvect, rpc_tvect);
-	fflush(stdout);
 	if (rcec_tvect == 0 || rpc_tvect == 0) {
 		ErrorAlert(GetString(STR_NO_NAME_REGISTRY_ERR));
 		QuitEmulator();
 	}
 
 	// Main routine must be executed in PPC mode
-	printf("SheepShaver registry: ExecuteNative(NATIVE_PATCH_NAME_REGISTRY)\n");
-	fflush(stdout);
 	ExecuteNative(NATIVE_PATCH_NAME_REGISTRY);
-	printf("SheepShaver registry: PatchNameRegistry done\n");
-	fflush(stdout);
 }

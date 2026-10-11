@@ -1070,6 +1070,41 @@ bool SysCDReadTOC(void *arg, uint8 *toc)
 
 	if (fh->is_cdrom) {
 
+		// CD-ROM image file: synthesize a single data track TOC
+		if (fh->is_file && fh->fd >= 0) {
+			loff_t size = lseek(fh->fd, 0, SEEK_END);
+			if (size > 0) {
+				uint8 *p = toc + 2;
+				*p++ = 1;					// First track
+				*p++ = 1;					// Last track
+
+				// Track 1 (data), starting at LBA 0
+				*p++ = 0;					// Session
+				*p++ = 0x14;				// Control/ADR: data track
+				*p++ = 1;					// Track number
+				*p++ = 0;					// Reserved
+				*p++ = 0;					// M
+				*p++ = 2;					// S
+				*p++ = 0;					// F
+
+				// Lead-out track
+				uint32 end_msf = (uint32)(size / 2048) + 150;
+				*p++ = 0;					// Session
+				*p++ = 0x14;				// Control/ADR
+				*p++ = 0xaa;				// Lead-out track number
+				*p++ = 0;					// Reserved
+				*p++ = end_msf / 4500;		// M
+				*p++ = (end_msf % 4500) / 75;	// S
+				*p++ = end_msf % 75;		// F
+
+				int toc_size = p - toc;
+				*toc++ = toc_size >> 8;
+				*toc = toc_size & 0xff;
+				return true;
+			}
+			return false;
+		}
+
 #if defined(__linux__)
 		uint8 *p = toc + 2;
 

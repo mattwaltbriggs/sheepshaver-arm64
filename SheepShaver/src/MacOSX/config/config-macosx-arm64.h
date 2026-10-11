@@ -12,7 +12,7 @@
 #undef PAGEZERO_HACK
 
 #undef ENABLE_DYNGEN
-#define ENABLE_DYNGEN 0
+#define ENABLE_DYNGEN 1
 
 /* Keep the decoded block cache on for arm64 builds. The PPC core source is
    compiled with conservative optimization on arm64 to avoid Release-only
@@ -21,3 +21,8 @@
 #define PPC_DECODE_CACHE 1
 
 #undef HAVE_LINKER_SCRIPT
+
+/* Use the 64-bit Mach exception interface. libSystem's 32-bit exc_server no
+   longer dispatches to the user's catch_exception_raise on arm64, so we
+   bundle our own MIG-generated mach_exc server (see sigsegv.cpp). */
+#define HAVE_MACH64_VM 1

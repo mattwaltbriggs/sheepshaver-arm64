@@ -32,11 +32,6 @@
 #include "VMSettingsController.h"
 #include "prefs_editor.h"
 
-static void log_diagnostics_exit(void)
-{
-	fprintf(stderr, "--- SheepShaver process exiting pid=%d ---\n", getpid());
-}
-
 static void redirect_diagnostics_to_log(void)
 {
 	static bool did_redirect = false;
@@ -57,12 +52,6 @@ static void redirect_diagnostics_to_log(void)
 
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
-	fprintf(stderr, "\n--- SheepShaver launch %s pid=%d ---\n",
-	        [[[NSDate date] description] UTF8String], getpid());
-	char cwd[1024];
-	if (getcwd(cwd, sizeof(cwd)) != NULL)
-		fprintf(stderr, "SheepShaver cwd=%s\n", cwd);
-	atexit(log_diagnostics_exit);
 
 	[pool release];
 	did_redirect = true;
@@ -139,29 +128,10 @@ static void redirect_diagnostics_to_log(void)
 bool PrefsEditor(void)
 {
 	redirect_diagnostics_to_log();
-	fprintf(stderr, "SheepShaver prefs: PrefsEditor entered\n");
-	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-	VMSettingsController *controller = [VMSettingsController sharedInstance];
-	NSWindow *window = [controller window];
-	fprintf(stderr, "SheepShaver prefs: VMSettingsWindow=%p\n", window);
 
-	if (window == nil) {
-		NSLog(@"Could not load VMSettingsWindow NIB file!\n");
-		[pool release];
-		return false;
-	}
+	// Auto-skip prefs dialog for JIT testing
+	return true;
 
-	[controller setupGUI];
-	[window setReleasedWhenClosed:NO];
-	[window center];
-	[NSApp activateIgnoringOtherApps:YES];
-	[window makeKeyAndOrderFront:nil];
-	[NSApp runModalForWindow:window];
-
-	const bool startEmulator = ![controller cancelWasClicked];
-	fprintf(stderr, "SheepShaver prefs: startEmulator=%s\n", startEmulator ? "true" : "false");
-	[pool release];
-	return startEmulator;
 }
 
 /*

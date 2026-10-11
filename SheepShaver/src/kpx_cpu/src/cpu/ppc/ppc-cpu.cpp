@@ -565,6 +565,18 @@ void *powerpc_cpu::compile_chain_block(block_info *sbi)
 }
 #endif
 
+// Resolve the block to execute at the current pc from generated code. Returns
+// NULL if the target block is not yet compiled / not found -- the generated
+// jump helper then falls through to the exec-return glue, which re-enters the
+// dispatch loop in execute() and compiles the block.
+void *powerpc_cpu::resolve_next_block(block_info *bi)
+{
+	const uint32 npc = pc();
+	if (bi->pc != npc && (bi = my_block_cache.fast_find(npc)) == NULL)
+		return NULL;
+	return bi->entry_point;
+}
+
 void powerpc_cpu::execute(uint32 entry)
 {
 	bool invalidated_cache = false;

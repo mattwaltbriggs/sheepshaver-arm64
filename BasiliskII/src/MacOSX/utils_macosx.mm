@@ -44,8 +44,6 @@ bool macosx_display_alert(const char *title, const char *text, const char *first
 	NSString *message = title ? [NSString stringWithUTF8String:title] : @"SheepShaver";
 	NSString *informativeText = text ? [NSString stringWithUTF8String:text] : @"";
 
-	NSLog(@"%@: %@", message, informativeText);
-
 	[alert setMessageText:message];
 	[alert setInformativeText:informativeText];
 	[alert addButtonWithTitle:first_button ? [NSString stringWithUTF8String:first_button] : @"OK"];

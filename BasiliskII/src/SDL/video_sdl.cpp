@@ -2261,7 +2261,6 @@ static inline void do_video_refresh(void)
 	// Update display
 	video_refresh();
 
-
 	// Set new palette if it was changed
 	handle_palette_changes();
 }
@@ -2276,6 +2275,14 @@ void VideoRefresh(void)
 
 	// Process pending events and update display
 	do_video_refresh();
+#ifdef SHEEPSHAVER
+	// Also trigger a VBL interrupt at video refresh rate (helps ROMs that
+	// wait on VBL rather than tick interrupts)
+	extern void SetInterruptFlag(uint32);
+	SetInterruptFlag(1); // INTFLAG_VIA
+	extern void TriggerInterrupt(void);
+	TriggerInterrupt();
+#endif
 }
 
 const int VIDEO_REFRESH_HZ = 60;

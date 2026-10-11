@@ -54,14 +54,7 @@
 
 void powerpc_cpu::execute_illegal(uint32 opcode)
 {
-#ifdef SHEEPSHAVER
-	fprintf(stderr,
-	        "SheepShaver ppc: illegal instruction pc=0x%08x opcode=0x%08x lr=0x%08x ctr=0x%08x sp=0x%08x cr=0x%08x\n",
-	        pc(), opcode, lr(), ctr(), gpr(1), cr().get());
-	fflush(stderr);
-#else
 	fprintf(stderr, "Illegal instruction at %08x, opcode = %08x\n", pc(), opcode);
-#endif
 #ifdef SHEEPSHAVER
 	if (PrefsFindBool("ignoreillegal")) {
 		increment_pc(4);

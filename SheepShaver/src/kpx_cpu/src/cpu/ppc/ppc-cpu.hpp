@@ -33,7 +33,6 @@
 #include "cpu/ppc/ppc-jit.hpp"
 #endif
 #include "cpu/ppc/ppc-instructions.hpp"
-#include <stdio.h>
 #include <vector>
 
 class powerpc_cpu
@@ -116,6 +115,13 @@ public:
 	uint64 fpr_dw(int i) const	{ return regs().fpr[i].j; }
 	powerpc_vr & vr(int i)		{ return regs().vr[i]; }
 	powerpc_vr const & vr(int i) const { return regs().vr[i]; }
+
+#if ENABLE_DYNGEN && defined(__aarch64__)
+	powerpc_xer_register & jit_xer()			{ return regs().xer; }
+	powerpc_xer_register const & jit_xer() const	{ return regs().xer; }
+	powerpc_registers & jit_regs()				{ return regs(); }
+	powerpc_registers const & jit_regs() const	{ return regs(); }
+#endif
 
 protected:
 
@@ -375,6 +381,9 @@ private:
 #if DYNGEN_DIRECT_BLOCK_CHAINING
 	void *compile_chain_block(block_info *sbi);
 #endif
+public:
+	void *resolve_next_block(block_info *bi);
+private:
 #endif
 
 	// Semantic action templates
@@ -504,22 +513,9 @@ private:
 inline void powerpc_cpu::trigger_interrupt()
 {
 #if PPC_CHECK_INTERRUPTS || defined(SHEEPSHAVER)
-#ifdef SHEEPSHAVER
-	const uint32 flags_before = spcflags().get();
-#endif
 	spcflags().set(SPCFLAG_CPU_TRIGGER_INTERRUPT);
 #if PPC_ENABLE_JIT
 	spcflags().set(SPCFLAG_JIT_EXEC_RETURN);
-#endif
-#ifdef SHEEPSHAVER
-	static unsigned long long trigger_set_count = 0;
-	trigger_set_count++;
-	if (trigger_set_count <= 8 || ((trigger_set_count & 0xffULL) == 0)) {
-		fprintf(stderr,
-		        "SheepShaver ppc: trigger_interrupt set count=%llu cpu=%p flags_before=0x%08x flags_after=0x%08x\n",
-		        trigger_set_count, (void *)this, flags_before, spcflags().get());
-		fflush(stderr);
-	}
 #endif
 #endif
 }

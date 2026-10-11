@@ -106,6 +106,12 @@
 		0873A54314AAF18E004F12B7 /* dyngen.c in Sources */ = {isa = PBXBuildFile; fileRef = 0873A54114AAF18E004F12B7 /* dyngen.c */; };
 		0873A5D614AB80CA004F12B7 /* basic-dyngen-ops.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0873A5D514AB80CA004F12B7 /* basic-dyngen-ops.cpp */; };
 		0873A5D814AB80E3004F12B7 /* ppc-dyngen-ops.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0873A5D714AB80E3004F12B7 /* ppc-dyngen-ops.cpp */; };
+		B0A1C2D3E4F5A6B7C8D9E0F2 /* jit-wx.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B0A1C2D3E4F5A6B7C8D9E0F1 /* jit-wx.cpp */; };
+		AA0000001000000100000001 /* basic-dyngen.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0856CDC514A99EEF000B1711 /* basic-dyngen.cpp */; };
+		AA0000001000000100000002 /* jit-cache.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0856CDCD14A99EEF000B1711 /* jit-cache.cpp */; };
+		AA0000001000000100000003 /* ppc-dyngen.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0856CDE614A99EEF000B1711 /* ppc-dyngen.cpp */; };
+		AA0000001000000100000004 /* ppc-jit.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0856CDEB14A99EEF000B1711 /* ppc-jit.cpp */; };
+		AA0000001000000100000005 /* arm64-helpers.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA0000001000000100000006 /* arm64-helpers.cpp */; };
 		0873A76814ABD151004F12B7 /* config-macosx-x86_64.h in Headers */ = {isa = PBXBuildFile; fileRef = 0873A76614ABD151004F12B7 /* config-macosx-x86_64.h */; };
 		0873A76914ABD151004F12B7 /* config.h in Headers */ = {isa = PBXBuildFile; fileRef = 0873A76714ABD151004F12B7 /* config.h */; };
 		0873A76A14ABD151004F12B7 /* config-macosx-x86_64.h in Headers */ = {isa = PBXBuildFile; fileRef = 0873A76614ABD151004F12B7 /* config-macosx-x86_64.h */; };
@@ -255,6 +261,7 @@
 		0856CDC114A99EEF000B1711 /* dyngen-target-exec.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "dyngen-target-exec.h"; sourceTree = "<group>"; };
 		0856CDC214A99EEF000B1711 /* jit-target-cache.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = "jit-target-cache.hpp"; sourceTree = "<group>"; };
 		0856CDC314A99EEF000B1711 /* jit-target-codegen.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = "jit-target-codegen.hpp"; sourceTree = "<group>"; };
+		B0A1C2D3E4F5A6B7C8D9E0F1 /* jit-wx.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = "jit-wx.cpp"; sourceTree = "<group>"; };
 		0856CDC514A99EEF000B1711 /* basic-dyngen.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = "basic-dyngen.cpp"; sourceTree = "<group>"; };
 		0856CDC614A99EEF000B1711 /* basic-dyngen.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = "basic-dyngen.hpp"; sourceTree = "<group>"; };
 		0856CDCA14A99EEF000B1711 /* jit-target-cache.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = "jit-target-cache.hpp"; sourceTree = "<group>"; };
@@ -400,6 +407,7 @@
 		0873A5CC14AB806D004F12B7 /* libppc-dyngen-ops.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libppc-dyngen-ops.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0873A5D514AB80CA004F12B7 /* basic-dyngen-ops.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = "basic-dyngen-ops.cpp"; sourceTree = "<group>"; };
 		0873A5D714AB80E3004F12B7 /* ppc-dyngen-ops.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = "ppc-dyngen-ops.cpp"; sourceTree = "<group>"; };
+		AA0000001000000100000006 /* arm64-helpers.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = "arm64-helpers.cpp"; sourceTree = "<group>"; };
 		0873A76614ABD151004F12B7 /* config-macosx-x86_64.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "config-macosx-x86_64.h"; sourceTree = "<group>"; };
 		0873A76714ABD151004F12B7 /* config.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = config.h; sourceTree = "<group>"; };
 		0873A80014AC515D004F12B7 /* utils_macosx.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = utils_macosx.h; sourceTree = "<group>"; };
@@ -674,8 +682,10 @@
 		0856CDBF14A99EEF000B1711 /* jit */ = {
 			isa = PBXGroup;
 			children = (
+				AA0000001000000100000007 /* arm64 */,
 				0856CDC014A99EEF000B1711 /* amd64 */,
 				0856CDC514A99EEF000B1711 /* basic-dyngen.cpp */,
+				B0A1C2D3E4F5A6B7C8D9E0F1 /* jit-wx.cpp */,
 				0856CDC614A99EEF000B1711 /* basic-dyngen.hpp */,
 				0873A5D514AB80CA004F12B7 /* basic-dyngen-ops.cpp */,
 				0856CDC914A99EEF000B1711 /* dummy */,
@@ -703,6 +713,14 @@
 				0856CDC314A99EEF000B1711 /* jit-target-codegen.hpp */,
 			);
 			path = amd64;
+			sourceTree = "<group>";
+		};
+		AA0000001000000100000007 /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000001000000100000006 /* arm64-helpers.cpp */,
+			);
+			path = arm64;
 			sourceTree = "<group>";
 		};
 		0856CDC914A99EEF000B1711 /* dummy */ = {
@@ -1331,7 +1349,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Bundle SDL dylibs\nset -eu\n\nAPP=\"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\nFW=\"${APP}/Contents/Frameworks\"\nEXE=\"${APP}/Contents/MacOS/${EXECUTABLE_NAME}\"\n\nmkdir -p \"$FW\"\n\nSDL12=\"/opt/homebrew/opt/sdl12-compat/lib/libSDL-1.2.0.dylib\"\nSDL2=\"/opt/homebrew/opt/sdl2-compat/lib/libSDL2-2.0.0.dylib\"\nSDL3=\"/opt/homebrew/opt/sdl3/lib/libSDL3.0.dylib\"\n\ncp -f \"$SDL12\" \"$FW/\"\ncp -f \"$SDL2\" \"$FW/\"\ncp -f \"$SDL3\" \"$FW/\"\n\nln -sf libSDL-1.2.0.dylib \"$FW/libSDL.dylib\"\nln -sf libSDL2-2.0.0.dylib \"$FW/libSDL2.dylib\"\nln -sf libSDL2-2.0.0.dylib \"$FW/libSDL2-2.0.dylib\"\nln -sf libSDL3.0.dylib \"$FW/libSDL3.dylib\"\n\ninstall_name_tool -change \"$SDL12\" \"@executable_path/../Frameworks/libSDL-1.2.0.dylib\" \"$EXE\"\ninstall_name_tool -id \"@loader_path/libSDL-1.2.0.dylib\" \"$FW/libSDL-1.2.0.dylib\"\ninstall_name_tool -id \"@loader_path/libSDL2-2.0.0.dylib\" \"$FW/libSDL2-2.0.0.dylib\"\ninstall_name_tool -id \"@loader_path/libSDL3.0.dylib\" \"$FW/libSDL3.0.dylib\"\n\nSIGN_IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-}\"\nif [ -z \"$SIGN_IDENTITY\" ]; then\n  SIGN_IDENTITY=\"${CODE_SIGN_IDENTITY:--}\"\nfi\nif [ -z \"$SIGN_IDENTITY\" ]; then\n  SIGN_IDENTITY=\"-\"\nfi\n\ncodesign --force --sign \"$SIGN_IDENTITY\" \"$FW/libSDL3.0.dylib\"\ncodesign --force --sign \"$SIGN_IDENTITY\" \"$FW/libSDL2-2.0.0.dylib\"\ncodesign --force --sign \"$SIGN_IDENTITY\" \"$FW/libSDL-1.2.0.dylib\"\ncodesign --force --sign \"$SIGN_IDENTITY\" \"$APP\"\n";
+			shellScript = "# Bundle SDL dylibs\nset -eu\n\nAPP=\"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\nFW=\"${APP}/Contents/Frameworks\"\nEXE=\"${APP}/Contents/MacOS/${EXECUTABLE_NAME}\"\nENT=\"${SRCROOT}/SheepShaver/SheepShaver.entitlements\"\n\nmkdir -p \"$FW\"\n\nSDL12=\"/opt/homebrew/opt/sdl12-compat/lib/libSDL-1.2.0.dylib\"\nSDL2=\"/opt/homebrew/opt/sdl2-compat/lib/libSDL2-2.0.0.dylib\"\nSDL3=\"/opt/homebrew/opt/sdl3/lib/libSDL3.0.dylib\"\n\ncp -f \"$SDL12\" \"$FW/\"\ncp -f \"$SDL2\" \"$FW/\"\ncp -f \"$SDL3\" \"$FW/\"\n\nln -sf libSDL-1.2.0.dylib \"$FW/libSDL.dylib\"\nln -sf libSDL2-2.0.0.dylib \"$FW/libSDL2.dylib\"\nln -sf libSDL2-2.0.0.dylib \"$FW/libSDL2-2.0.dylib\"\nln -sf libSDL3.0.dylib \"$FW/libSDL3.dylib\"\n\ninstall_name_tool -change \"$SDL12\" \"@executable_path/../Frameworks/libSDL-1.2.0.dylib\" \"$EXE\"\ninstall_name_tool -id \"@loader_path/libSDL-1.2.0.dylib\" \"$FW/libSDL-1.2.0.dylib\"\ninstall_name_tool -id \"@loader_path/libSDL2-2.0.0.dylib\" \"$FW/libSDL2-2.0.0.dylib\"\ninstall_name_tool -id \"@loader_path/libSDL3.0.dylib\" \"$FW/libSDL3.0.dylib\"\n\ncodesign --force --sign - --options runtime \"$FW/libSDL3.0.dylib\"\ncodesign --force --sign - --options runtime \"$FW/libSDL2-2.0.0.dylib\"\ncodesign --force --sign - --options runtime \"$FW/libSDL-1.2.0.dylib\"\ncodesign --force --sign - --options runtime --entitlements \"$ENT\" \"$EXE\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1357,6 +1375,12 @@
 				0846E4C014B1267F00574779 /* ppc-cpu.cpp in Sources */,
 				0846E51314B128ED00574779 /* sheepshaver_glue.cpp in Sources */,
 				08163340158C125800C449F9 /* ppc-dis.c in Sources */,
+				AA0000001000000100000001 /* basic-dyngen.cpp in Sources */,
+				AA0000001000000100000002 /* jit-cache.cpp in Sources */,
+				AA0000001000000100000003 /* ppc-dyngen.cpp in Sources */,
+				AA0000001000000100000004 /* ppc-jit.cpp in Sources */,
+				AA0000001000000100000005 /* arm64-helpers.cpp in Sources */,
+				B0A1C2D3E4F5A6B7C8D9E0F2 /* jit-wx.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1617,7 +1641,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_NAME = kpx_cpu;
 				SDKROOT = macosx;
-				"SDKROOT[arch=x86_64]" = macosx26.5;
+				"SDKROOT[arch=x86_64]" = macosx;
 			};
 			name = Debug;
 		};
@@ -1660,7 +1684,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_NAME = kpx_cpu;
 				SDKROOT = macosx;
-				"SDKROOT[arch=x86_64]" = macosx26.5;
+				"SDKROOT[arch=x86_64]" = macosx;
 				ZERO_LINK = NO;
 			};
 			name = Release;
@@ -1862,8 +1886,10 @@
 				PRECOMPS_INCLUDE_HEADERS_FROM_BUILT_PRODUCTS_DIR = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = org.macemu.SheepShaver;
 				PRODUCT_NAME = SheepShaver;
-				SDKROOT = macosx26.5;
-				"SDKROOT[arch=x86_64]" = macosx26.5;
+				SDKROOT = macosx;
+				"SDKROOT[arch=x86_64]" = macosx;
+				CODE_SIGN_ENTITLEMENTS = SheepShaver/SheepShaver.entitlements;
+				ENABLE_HARDENED_RUNTIME = YES;
 				WARNING_LDFLAGS = "";
 			};
 			name = Debug;
@@ -1949,8 +1975,12 @@
 				PRECOMPS_INCLUDE_HEADERS_FROM_BUILT_PRODUCTS_DIR = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = org.macemu.SheepShaver;
 				PRODUCT_NAME = SheepShaver;
-				SDKROOT = macosx26.5;
-				"SDKROOT[arch=x86_64]" = macosx26.5;
+				SDKROOT = macosx;
+				"SDKROOT[arch=x86_64]" = macosx;
+				CODE_SIGN_ENTITLEMENTS = SheepShaver/SheepShaver.entitlements;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ZERO_LINK = NO;
 			};
 			name = Release;
@@ -2226,7 +2256,7 @@
 				INSTALL_PATH = /usr/local/lib;
 				PRECOMPS_INCLUDE_HEADERS_FROM_BUILT_PRODUCTS_DIR = NO;
 				PRODUCT_NAME = clip;
-				SDKROOT = macosx26.5;
+				SDKROOT = macosx;
 			};
 			name = Debug;
 		};
@@ -2253,7 +2283,7 @@
 				INSTALL_PATH = /usr/local/lib;
 				PRECOMPS_INCLUDE_HEADERS_FROM_BUILT_PRODUCTS_DIR = NO;
 				PRODUCT_NAME = clip;
-				SDKROOT = macosx26.5;
+				SDKROOT = macosx;
 				ZERO_LINK = NO;
 			};
 			name = Release;
@@ -2283,7 +2313,7 @@
 				INSTALL_PATH = /usr/local/lib;
 				PRECOMPS_INCLUDE_HEADERS_FROM_BUILT_PRODUCTS_DIR = NO;
 				PRODUCT_NAME = clip64;
-				SDKROOT = macosx26.5;
+				SDKROOT = macosx;
 			};
 			name = Debug;
 		};
@@ -2311,7 +2341,7 @@
 				INSTALL_PATH = /usr/local/lib;
 				PRECOMPS_INCLUDE_HEADERS_FROM_BUILT_PRODUCTS_DIR = NO;
 				PRODUCT_NAME = clip64;
-				SDKROOT = macosx26.5;
+				SDKROOT = macosx;
 				ZERO_LINK = NO;
 			};
 			name = Release;

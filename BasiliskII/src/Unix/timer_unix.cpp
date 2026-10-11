@@ -352,28 +352,8 @@ static int idle_sem_ok = -1;
 #endif
 #endif
 
-static uint64 idle_resume_count = 0;
-
-static bool idle_trace_now(uint64 count)
-{
-	return count <= 16 || (count % 1000) == 0;
-}
-
-static void idle_trace(const char *event, uint64 wait_count, uint64 resume_count, uint64 timeout_count)
-{
-	printf("SheepShaver idle: %s wait=%llu resume=%llu timeout=%llu\n",
-		event,
-		(unsigned long long)wait_count,
-		(unsigned long long)resume_count,
-		(unsigned long long)timeout_count);
-	fflush(stdout);
-}
-
 void idle_wait(void)
 {
-	static uint64 wait_count = 0;
-	static uint64 timeout_count = 0;
-	wait_count++;
 #ifdef IDLE_USES_COND_WAIT
 	struct timeval now;
 	struct timespec deadline;
@@ -385,12 +365,8 @@ void idle_wait(void)
 		deadline.tv_nsec -= 1000000000;
 	}
 	pthread_mutex_lock(&idle_lock);
-	int wait_result = pthread_cond_timedwait(&idle_cond, &idle_lock, &deadline);
+	pthread_cond_timedwait(&idle_cond, &idle_lock, &deadline);
 	pthread_mutex_unlock(&idle_lock);
-	if (wait_result == ETIMEDOUT)
-		timeout_count++;
-	if (idle_trace_now(wait_count) || (wait_result != ETIMEDOUT && wait_count <= 64))
-		idle_trace(wait_result == ETIMEDOUT ? "wait timeout" : "wait signaled", wait_count, idle_resume_count, timeout_count);
 #else
 #ifdef IDLE_USES_SEMAPHORE
 	LOCK_IDLE;
@@ -400,8 +376,6 @@ void idle_wait(void)
 		idle_sem_ok++;
 		UNLOCK_IDLE;
 		sem_wait(&idle_sem);
-		if (idle_trace_now(wait_count))
-			idle_trace("semaphore wait returned", wait_count, idle_resume_count, timeout_count);
 		return;
 	}
 	UNLOCK_IDLE;
@@ -409,9 +383,6 @@ void idle_wait(void)
 
 	// Fallback: sleep 10 ms
 	Delay_usec(10000);
-	timeout_count++;
-	if (idle_trace_now(wait_count))
-		idle_trace("fallback delay", wait_count, idle_resume_count, timeout_count);
 #endif
 }
 
@@ -422,9 +393,6 @@ void idle_wait(void)
 
 void idle_resume(void)
 {
-	idle_resume_count++;
-	if (idle_trace_now(idle_resume_count))
-		idle_trace("resume", 0, idle_resume_count, 0);
 #ifdef IDLE_USES_COND_WAIT
 	pthread_cond_signal(&idle_cond);
 #else

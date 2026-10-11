@@ -65,7 +65,6 @@ const uint32 ZERO_SCRAP_PATCH_SPACE = 0x2fcf80;
 const uint32 PUT_SCRAP_PATCH_SPACE = 0x2fcfc0;
 const uint32 GET_SCRAP_PATCH_SPACE = 0x2fd100;
 const uint32 ADDR_MAP_PATCH_SPACE = 0x2fd140;
-const uint32 FALLBACK_SIFT_PATCH_SPACE = 0x2fd200;
 
 // Global variables
 int ROMType;				// ROM type
@@ -225,42 +224,15 @@ static uint32 find_rom_data(uint32 start, uint32 end, const uint8 *data, uint32 
 static uint32 rsrc_ptr = 0;
 
 // id = 4711 means "find any ID"
-static bool rom_resources_dumped = false;
 static uint32 find_rom_resource(uint32 s_type, int16 s_id = 4711, bool cont = false)
 {
 	uint32 lp = ROMBase + 0x1a;
 	uint32 x = ReadMacInt32(lp);
 	uint32 header_size = ReadMacInt8(ROMBase + x + 5);
 
-	if (!cont) {
+	if (!cont)
 		rsrc_ptr = x;
-		if (!rom_resources_dumped) {
-			rom_resources_dumped = true;
-			printf("ROM resources: map_ptr=0x%08x header_size=%d\n", x, header_size);
-			fflush(stdout);
-			// Dump all resources in the map
-			uint32 dump_ptr = x;
-			int dump_count = 0;
-			for (;;) {
-				uint32 entry_addr = dump_ptr;
-				dump_ptr = ReadMacInt32(ROMBase + entry_addr);
-				if (dump_ptr == 0)
-					break;
-				dump_ptr += header_size;
-				uint32 eaddr = dump_ptr + 4;
-				uint32 data = ReadMacInt32(ROMBase + eaddr);
-				uint32 type = ReadMacInt32(ROMBase + eaddr + 4);
-				int16 id = ReadMacInt16(ROMBase + eaddr + 8);
-				dump_count++;
-				if (dump_count <= 200) {
-					printf("ROM rsrc #%d: entry=0x%08x data=0x%08x type=%.4s id=%d\n",
-						dump_count, entry_addr, data, &type, id);
-				}
-			}
-			printf("ROM resources: total=%d\n", dump_count);
-			fflush(stdout);
-		}
-	} else if (rsrc_ptr == 0)
+	else if (rsrc_ptr == 0)
 		return 0;
 
 	for (;;) {
@@ -733,8 +705,6 @@ bool PatchROM(void)
 	if (!check_rom_patch_space(GET_SCRAP_PATCH_SPACE, 0x40))
 		return false;
 	if (!check_rom_patch_space(ADDR_MAP_PATCH_SPACE - 10 * 4, 0x100))
-		return false;
-	if (!check_rom_patch_space(FALLBACK_SIFT_PATCH_SPACE, 0x40))
 		return false;
 
 	// Apply patches
@@ -2360,58 +2330,26 @@ static bool patch_68k(void)
 	}
 
 	// Construct list of all sifters used by sound components in ROM
+	D(bug("Searching for sound components with type sdev in ROM\n"));
 	uint32 thing = find_rom_resource(FOURCC('t','h','n','g'));
-	int thing_count = 0;
 	while (thing) {
 		thing += ROMBase;
-		thing_count++;
-		uint32 c_type = ReadMacInt32(thing);
-		uint32 c_subtype = ReadMacInt32(thing + 4);
-		uint32 c_flags = ReadMacInt32(thing + componentFlags);
-		uint32 c_restype = ReadMacInt32(thing + componentResType);
-		int16 c_resid = ReadMacInt16(thing + componentResID);
-		int16 c_version = ReadMacInt16(thing + componentVersion);
-		printf("ROM patches: thng #%d at %08x: type=%.4s subtype=%.4s flags=%08x resType=%.4s resID=%d version=%d\n",
-			thing_count, thing,
-			&c_type, &c_subtype, c_flags, &c_restype, c_resid, c_version);
-		fflush(stdout);
-		if (c_type == FOURCC('s','d','e','v') && c_subtype == FOURCC('s','i','n','g')) {
+		D(bug(" found %c%c%c%c %c%c%c%c\n", ReadMacInt8(thing), ReadMacInt8(thing + 1), ReadMacInt8(thing + 2), ReadMacInt8(thing + 3), ReadMacInt8(thing + 4), ReadMacInt8(thing + 5), ReadMacInt8(thing + 6), ReadMacInt8(thing + 7)));
+		if (ReadMacInt32(thing) == FOURCC('s','d','e','v') && ReadMacInt32(thing + 4) == FOURCC('s','i','n','g')) {
 			WriteMacInt32(thing + 4, FOURCC('a','w','g','c'));
-			printf("ROM patches: found sdev/sing component, adding sifters (resType=%.4s resID=%d)\n", &c_restype, c_resid);
-			fflush(stdout);
+			D(bug(" found sdev component at offset %08x in ROM\n", thing));
 			AddSifter(ReadMacInt32(thing + componentResType), ReadMacInt16(thing + componentResID));
 			if (ReadMacInt32(thing + componentPFCount))
 				AddSifter(ReadMacInt32(thing + componentPFResType), ReadMacInt16(thing + componentPFResID));
 		}
 		thing = find_rom_resource(FOURCC('t','h','n','g'), 4711, true);
 	}
-	printf("ROM patches: found %d thng resources, num_sifters=%d\n", thing_count, num_sifters);
-	fflush(stdout);
-
-	// If no sound components found in ROM, install fallback audio sifter directly
-	if (num_sifters == 0) {
-		D(bug("ROM patches: no sound components in ROM, installing fallback audio sifter\n"));
-		uint16 *wp = (uint16 *)(ROMBaseHost + FALLBACK_SIFT_PATCH_SPACE);
-		*wp++ = htons(0x4e56); *wp++ = htons(0x0000);	// link a6,#0
-		*wp++ = htons(0x48e7); *wp++ = htons(0x8018);	// movem.l d0/a3-a4,-(a7)
-		*wp++ = htons(0x266e); *wp++ = htons(0x000c);	// movea.l $c(a6),a3
-		*wp++ = htons(0x286e); *wp++ = htons(0x0008);	// movea.l $8(a6),a4
-		*wp++ = htons(M68K_EMUL_OP_AUDIO_DISPATCH);
-		*wp++ = htons(0x2d40); *wp++ = htons(0x0010);	// move.l d0,$10(a6)
-		*wp++ = htons(0x4cdf); *wp++ = htons(0x1801);	// movem.l (a7)+,d0/a3-a4
-		*wp++ = htons(0x4e5e);							// unlk a6
-		*wp++ = htons(0x4e74); *wp++ = htons(0x0008);	// rtd #8
-		AddSifter(FOURCC('s','n','d',' '), 1);
-	}
 
 	// Patch component code
+	D(bug("Patching sifters in ROM\n"));
 	for (int i=0; i<num_sifters; i++) {
-		thing = find_rom_resource(sifter_list[i].type, sifter_list[i].id);
-		if (thing == 0 && num_sifters == 1 && i == 0)
-			thing = FALLBACK_SIFT_PATCH_SPACE;	// Fallback: use pre-installed sifter
-		if (thing != 0) {
-			printf("ROM patches: patching sifter type=%.4s id=%d at offset %08x\n", &sifter_list[i].type, sifter_list[i].id, thing);
-			fflush(stdout);
+		if ((thing = find_rom_resource(sifter_list[i].type, sifter_list[i].id)) != 0) {
+			D(bug(" patching type %08x, id %d\n", sifter_list[i].type, sifter_list[i].id));
 			// Install 68k glue code
 			uint16 *wp = (uint16 *)(ROMBaseHost + thing);
 			*wp++ = htons(0x4e56); *wp++ = htons(0x0000);	// link a6,#0
@@ -2436,8 +2374,6 @@ static bool patch_68k(void)
 void InstallDrivers(void)
 {
 	D(bug("Installing drivers...\n"));
-	printf("SheepShaver drivers: InstallDrivers begin ROMType=%d sony_offset=0x%08x\n", ROMType, sony_offset);
-	fflush(stdout);
 	M68kRegisters r;
 	SheepArray<SIZEOF_IOParam> pb_var;
 	const uintptr pb = pb_var.addr();
@@ -2466,19 +2402,13 @@ void InstallDrivers(void)
 	}
 
 	// Open .Sony driver
-	printf("SheepShaver drivers: opening .Sony\n");
-	fflush(stdout);
 	SheepString sony_str("\005.Sony");
 	WriteMacInt8(pb + ioPermssn, 0);
 	WriteMacInt32(pb + ioNamePtr, sony_str.addr());
 	r.a[0] = pb;
 	Execute68kTrap(0xa000, &r);		// Open()
-	printf("SheepShaver drivers: .Sony open result=%d\n", (int16)r.d[0]);
-	fflush(stdout);
 
 	// Install disk driver
-	printf("SheepShaver drivers: installing .Disk\n");
-	fflush(stdout);
 	r.a[0] = ROMBase + sony_offset + 0x100;
 	r.d[0] = (uint32)DiskRefNum;
 	Execute68kTrap(0xa43d, &r);		// DrvrInstallRsrvMem()
@@ -2489,21 +2419,15 @@ void InstallDrivers(void)
 	WriteMacInt16(dce + dCtlFlags, DiskDriverFlags);
 
 	// Open disk driver
-	printf("SheepShaver drivers: opening .Disk\n");
-	fflush(stdout);
 	SheepString disk_str("\005.Disk");
 	WriteMacInt32(pb + ioNamePtr, disk_str.addr());
 	r.a[0] = pb;
 	Execute68kTrap(0xa000, &r);		// Open()
-	printf("SheepShaver drivers: .Disk open result=%d\n", (int16)r.d[0]);
-	fflush(stdout);
 
 	// Install CD-ROM driver unless nocdrom option given
 	if (!PrefsFindBool("nocdrom")) {
 
 		// Install CD-ROM driver
-		printf("SheepShaver drivers: installing .AppleCD\n");
-		fflush(stdout);
 		r.a[0] = ROMBase + sony_offset + 0x200;
 		r.d[0] = (uint32)CDROMRefNum;
 		Execute68kTrap(0xa43d, &r);		// DrvrInstallRsrvMem()
@@ -2514,19 +2438,13 @@ void InstallDrivers(void)
 		WriteMacInt16(dce + dCtlFlags, CDROMDriverFlags);
 
 		// Open CD-ROM driver
-		printf("SheepShaver drivers: opening .AppleCD\n");
-		fflush(stdout);
 		SheepString apple_cd("\010.AppleCD");
 		WriteMacInt32(pb + ioNamePtr, apple_cd.addr());
 		r.a[0] = pb;
 		Execute68kTrap(0xa000, &r);		// Open()
-		printf("SheepShaver drivers: .AppleCD open result=%d\n", (int16)r.d[0]);
-		fflush(stdout);
 	}
 
 	// Install serial drivers
-	printf("SheepShaver drivers: installing serial drivers\n");
-	fflush(stdout);
 	r.a[0] = ROMBase + sony_offset + 0x300;
 	r.d[0] = (uint32)-6;
 	Execute68kTrap(0xa43d, &r);		// DrvrInstallRsrvMem()
@@ -2562,6 +2480,4 @@ void InstallDrivers(void)
 	dce = ReadMacInt32(r.a[0]);
 	WriteMacInt32(dce + dCtlDriver, ROMBase + sony_offset + 0x600);
 	WriteMacInt16(dce + dCtlFlags, 0x4e00);
-	printf("SheepShaver drivers: InstallDrivers done\n");
-	fflush(stdout);
 }
