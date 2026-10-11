@@ -83,8 +83,12 @@ static void redirect_diagnostics_to_log(void)
 	// Release the raw nib data.
 	[nib release];
  
-	// Release the top-level objects so that they are just owned by the array.
-	[objects makeObjectsPerformSelector:@selector(release)];
+	// The top-level objects are autoreleased (per NSNib.h); they are kept alive
+	// by the returned array, which the caller retains. Do NOT send -release to
+	// the individual objects: doing so over-releases subviews (e.g. NSButton)
+	// that the window still owns, causing:
+	//   "has reached dealloc but still has a super view" -> SIGABRT.
+	[objects retain];
 
 	prefsWindow = nil;
  	for (NSUInteger i = 0; i < [objects count]; i++) {
