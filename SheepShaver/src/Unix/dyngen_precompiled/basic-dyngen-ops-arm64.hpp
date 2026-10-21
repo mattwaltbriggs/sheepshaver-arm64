@@ -630,14 +630,14 @@ DEFINE_GEN(gen_op_mov_ad_A0_im,void,(long param1))
 DEFINE_GEN(gen_op_mov_ad_A1_im,void,(long param1))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_mov_ad_A1_im");
+	a64_emit_mov_imm64(*this, A64_T1, (uint64)param1);
 }
 #endif
 
 DEFINE_GEN(gen_op_mov_ad_A2_im,void,(long param1))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_mov_ad_A2_im");
+	a64_emit_mov_imm64(*this, A64_T2, (uint64)param1);
 }
 #endif
 
@@ -762,7 +762,7 @@ DEFINE_GEN(gen_op_nand_32_T0_T1,void,(void))
 DEFINE_GEN(gen_op_sdiv_32_T0_T1,void,(void))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_sdiv_32_T0_T1");
+	emit_32(a64_sdiv(A64_T0, A64_T0, A64_T1));
 }
 #endif
 
@@ -776,7 +776,7 @@ DEFINE_GEN(gen_op_smul_32_T0_T1,void,(void))
 DEFINE_GEN(gen_op_udiv_32_T0_T1,void,(void))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_udiv_32_T0_T1");
+	emit_32(a64_udiv(A64_T0, A64_T0, A64_T1));
 }
 #endif
 
@@ -790,7 +790,9 @@ DEFINE_GEN(gen_op_umul_32_T0_T1,void,(void))
 DEFINE_GEN(gen_op_xchg_32_T0_T1,void,(void))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_xchg_32_T0_T1");
+	emit_32(a64_mov_w(A64_X16, A64_T0));
+	emit_32(a64_mov_w(A64_T0, A64_T1));
+	emit_32(a64_mov_w(A64_T1, A64_X16));
 }
 #endif
 

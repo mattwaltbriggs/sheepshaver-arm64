@@ -51,6 +51,8 @@ REAL["gen_op_jmp_fast"] = ("\tconst intptr rel = (intptr)param1 - (intptr)code_p
 REAL["gen_op_jmp_slow"] = "\ta64_emit_jmp_abs(*this, (uintptr)param1);\n"
 REAL["gen_op_jmp_A0"] = "\temit_32(a64_br(A64_T0));\n"
 REAL["gen_op_mov_ad_A0_im"] = "\ta64_emit_mov_imm64(*this, A64_T0, (uint64)param1);\n"
+REAL["gen_op_mov_ad_A1_im"] = "\ta64_emit_mov_imm64(*this, A64_T1, (uint64)param1);\n"
+REAL["gen_op_mov_ad_A2_im"] = "\ta64_emit_mov_imm64(*this, A64_T2, (uint64)param1);\n"
 REAL["gen_op_invoke"] = invoke("")
 REAL["gen_op_invoke_T0"] = invoke("\temit_32(a64_mov_w(0, A64_T0));\n")
 REAL["gen_op_invoke_T0_T1"] = invoke("\temit_32(a64_mov_w(0, A64_T0));\n\temit_32(a64_mov_w(1, A64_T1));\n")
@@ -113,6 +115,24 @@ REAL["gen_op_spcflags_clear"] = ("\ta64_emit_mov_imm32(*this, A64_X16, (uint32)p
 REAL["gen_op_jump_next_A0"] = ("\temit_32(a64_mov_x(0, A64_CPU));\n\temit_32(a64_mov_x(1, A64_T0));\n"
                                "\ta64_emit_call(*this, (uintptr)&kpx_jit_jump_next);\n"
                                "\temit_32(a64_cbz_x(0, 8));\n\temit_32(a64_br(0));\n")
+# op_spcflags_init() is spcflags().set(PARAM1), and basic_spcflags::set() is a
+# fetch-or, so it is the same code as spcflags_set.
+REAL["gen_op_spcflags_init"] = REAL["gen_op_spcflags_set"]
+# op_inc_PC(): pc() += PARAM1 (PARAM1 is the signed increment, not a target)
+REAL["gen_op_inc_PC"] = ("\temit_32(a64_ldr_w(A64_X16, A64_CPU, (uint32)kpx_jit_pc_offset(cpu())));\n"
+                         "\ta64_emit_mov_imm32(*this, A64_X17, (uint32)param1);\n"
+                         "\temit_32(a64_add_reg(A64_X16, A64_X16, A64_X17));\n"
+                         "\temit_32(a64_str_w(A64_X16, A64_CPU, (uint32)kpx_jit_pc_offset(cpu())));\n")
+# op_inc_32_mem(): *(uint32 *)PARAM1 += 1. Only compiled when
+# PPC_PROFILE_GENERIC_CALLS is on (it is off by default), but implemented so
+# no dyngen op can abort() the emulator.
+REAL["gen_op_inc_32_mem"] = ("\ta64_emit_mov_imm32(*this, A64_X16, (uint32)param1);\n"
+                             "\temit_32(a64_ldr_w(A64_X17, A64_X16, 0));\n"
+                             "\temit_32(a64_add_imm(A64_X17, A64_X17, 1));\n"
+                             "\temit_32(a64_str_w(A64_X17, A64_X16, 0));\n")
+# op_emms() flushes the x86 MMX register file; arm64 has no MMX and NEON/FP
+# state needs no equivalent, so the op correctly emits nothing.
+REAL["gen_op_emms"] = ""
 
 # ------------------------------------------------------------------ scalar-integer compute core
 # Each function below returns a C++ body string. Offsets come from cpu() at gen time.
@@ -215,6 +235,15 @@ def alu(name):
         return emit(E("a64_umull(A64_X16, A64_T0, A64_T1)"), E("a64_lsr_imm_x(A64_X16, A64_X16, 32)"), E("a64_mov_w(A64_T0, A64_X16)"))
     if name == "gen_op_mulli_T0_im":
         return emit("a64_emit_mov_imm32(*this, A64_X16, (uint32)param1);", E("a64_mul(A64_T0, A64_T0, A64_X16)"))
+    # 32-bit divide. AArch64 SDIV/UDIV yield 0 for a zero divisor rather than
+    # raising #DE like x86, so a stray div-by-zero degrades to zero instead of
+    # killing the process.
+    m = re.match(r"gen_op_(s|u)div_32_T0_T1$", name)
+    if m: return emit(E("a64_%sdiv(A64_T0, A64_T0, A64_T1)" % m.group(1)))
+    if name == "gen_op_xchg_32_T0_T1":
+        return emit(E("a64_mov_w(A64_X16, A64_T0)"),
+                    E("a64_mov_w(A64_T0, A64_T1)"),
+                    E("a64_mov_w(A64_T1, A64_X16)"))
     return None
 
 def shifts(name):
@@ -827,7 +856,7 @@ def convert(src_path, dst_path, dst_name, is_basic):
             if m: ops.append((m.group(1), m.group(2)))
     out = [HEADER % dst_name]
     if is_basic: out.append(CST)
-    real = 0
+    real = stub = 0
     for nm, args in ops:
         gate = "#ifdef DYNGEN_IMPL\n"
         # The committed arm64 header carries the x86 dyngen tool's inert HAVE
@@ -840,17 +869,19 @@ def convert(src_path, dst_path, dst_name, is_basic):
         if b is not None:
             out.append(b); real += 1
         else:
-            out.append('\tkpx_jit_unimplemented_op("%s");\n' % nm)
+            out.append('\tkpx_jit_unimplemented_op("%s");\n' % nm); stub += 1
         out.append("}\n#endif\n")
     if not is_basic:
         for nm, args, body in EXTRA_PPC_OPS:
             out.append("\nDEFINE_GEN(%s,void,(%s))\n#ifdef DYNGEN_IMPL\n{\n" % (nm, args))
             out.append(body)
             out.append("}\n#endif\n")
-            real += 1
     out.append(FOOTER)
     open(dst_path, "w").write("".join(out))
-    print("%s: %d ops (%d real, %d stub)" % (dst_name, len(ops), real, len(ops) - real))
+    # extras are appended after the ops enumerated from the x86 header, so they
+    # are not part of len(ops) and must not be counted as implemented ops.
+    extra = 0 if is_basic else len(EXTRA_PPC_OPS)
+    print("%s: %d ops (%d real, %d stub, %d extra)" % (dst_name, len(ops), real, stub, extra))
 
 convert(SRC + "/basic-dyngen-ops-x86_64_macos.hpp", SRC + "/basic-dyngen-ops-arm64.hpp", "basic-dyngen-ops-arm64.hpp", True)
 convert(SRC + "/ppc-dyngen-ops-x86_64_macos.hpp", SRC + "/ppc-dyngen-ops-arm64.hpp", "ppc-dyngen-ops-arm64.hpp", False)

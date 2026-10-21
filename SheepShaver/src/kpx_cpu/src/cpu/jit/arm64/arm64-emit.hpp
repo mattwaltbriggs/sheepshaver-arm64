@@ -185,6 +185,11 @@ static inline uint32 a64_mul(int d,int n,int m){ return 0x1b007c00|(m<<16)|(n<<5
 static inline uint32 a64_smull(int d,int n,int m){ return 0x9b207c00|(m<<16)|(n<<5)|d; }      // Xd = Wn * Wm signed
 static inline uint32 a64_umull(int d,int n,int m){ return 0x9ba07c00|(m<<16)|(n<<5)|d; }      // Xd = Wn * Wm unsigned
 
+// divide (W-form). Unlike x86 these do not trap on a zero divisor: the result
+// is zero, so a stray div-by-zero degrades instead of killing the process.
+static inline uint32 a64_sdiv(int d,int n,int m){ return 0x1ac00c00|(m<<16)|(n<<5)|d; }       // SDIV Rd,Rn,Rm (W)
+static inline uint32 a64_udiv(int d,int n,int m){ return 0x1ac00800|(m<<16)|(n<<5)|d; }       // UDIV Rd,Rn,Rm (W)
+
 // variable shifts (W-form): mask count mod 32
 static inline uint32 a64_lslv(int d,int n,int m){ return 0x1ac02000|(m<<16)|(n<<5)|d; }
 static inline uint32 a64_lsrv(int d,int n,int m){ return 0x1ac02400|(m<<16)|(n<<5)|d; }

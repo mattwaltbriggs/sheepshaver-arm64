@@ -395,7 +395,10 @@ DEFINE_GEN(gen_op_fneg_FD_F0,void,(void))
 DEFINE_GEN(gen_op_inc_32_mem,void,(long param1))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_inc_32_mem");
+	a64_emit_mov_imm32(*this, A64_X16, (uint32)param1);
+	emit_32(a64_ldr_w(A64_X17, A64_X16, 0));
+	emit_32(a64_add_imm(A64_X17, A64_X17, 1));
+	emit_32(a64_str_w(A64_X17, A64_X16, 0));
 }
 #endif
 
@@ -3372,7 +3375,10 @@ DEFINE_GEN(gen_op_record_cr6_VD,void,(void))
 DEFINE_GEN(gen_op_spcflags_init,void,(long param1))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_spcflags_init");
+	a64_emit_mov_imm32(*this, A64_X16, (uint32)param1);
+	emit_32(a64_ldr_w(A64_X17, A64_CPU, (uint32)kpx_jit_spcflags_offset(cpu())));
+	emit_32(a64_orr_reg(A64_X16, A64_X16, A64_X17));
+	emit_32(a64_str_w(A64_X16, A64_CPU, (uint32)kpx_jit_spcflags_offset(cpu())));
 }
 #endif
 
@@ -7956,14 +7962,16 @@ DEFINE_GEN(gen_op_store_single_F0_T1_im,void,(long param1))
 DEFINE_GEN(gen_op_emms,void,(void))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_emms");
 }
 #endif
 
 DEFINE_GEN(gen_op_inc_PC,void,(long param1))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_inc_PC");
+	emit_32(a64_ldr_w(A64_X16, A64_CPU, (uint32)kpx_jit_pc_offset(cpu())));
+	a64_emit_mov_imm32(*this, A64_X17, (uint32)param1);
+	emit_32(a64_add_reg(A64_X16, A64_X16, A64_X17));
+	emit_32(a64_str_w(A64_X16, A64_CPU, (uint32)kpx_jit_pc_offset(cpu())));
 }
 #endif
 
