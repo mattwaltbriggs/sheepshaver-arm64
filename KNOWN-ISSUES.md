@@ -4,44 +4,27 @@ Note: for the upstream project, see the README. This file records problems
 specific to the Apple-silicon build on current macOS, with enough analysis that a
 future fix does not have to rediscover it.
 
-## Guest video-mode changes deadlock
+## Guest video-mode changes (fixed in 2.5.4)
 
-**Symptom.** A guest application that changes video mode (e.g. SimCity 2000 at
-startup) hangs the emulator. The window stays black and the app stops
-responding. No crash report is produced.
-
-On a stock build the same operation can instead die with `SIGTRAP`
-(`EXC_BREAKPOINT`) and a crash report showing:
+**Was.** A guest application that changed video mode (e.g. SimCity 2000 at
+startup) hung the emulator: the window went black and the app stopped
+responding, with no crash report. On a stock build the same operation could
+instead die with `SIGTRAP` (`EXC_BREAKPOINT`) and a crash report showing:
 
 ```
 asi: 'Must only be used from the main thread'
 ```
 
-The deadlock and the crash are the same underlying problem reached by slightly
-different orderings: `SDL_SetVideoMode` runs on the emulation thread.
+Both symptoms were the same underlying problem reached by slightly different
+orderings: `SDL_SetVideoMode` ran on the emulation thread. **Fixed in 2.5.4**;
+verified by booting a guest and switching modes in SimCity 2000.
 
-**Status.** Not fixed. Only affects guest apps that switch video mode; normal
-booting and everything else is unaffected.
+### Root cause
 
-### Why it happens
+There were two independent problems, and both had to be fixed.
 
-The guest's `VideoControl` trap executes on the emulation thread, so a mode
-change reaches SDL from there:
-
-```
-emul_func → powerpc_cpu::execute → execute_native_op → VideoDoDriverIO
-  → video_mode_change → switch_to_current_mode → video_open
-  → driver_base::init → driver_base::set_video_mode → SDL_SetVideoMode
-```
-
-`SDL_SetVideoMode` destroys the previous window before creating the new one
-(`SDL_DestroyWindow → SDL_HideWindow → -[NSWindow _doOrderWindow:]`), and macOS
-26+ `WindowManagement` hard-traps when an `NSWindow` is hidden off the main
-thread. So the call has to happen on the main thread.
-
-The trouble is that **the main thread is never free to service work queued for
-it**, which is the part that makes this resist the obvious fix. `SDLMain.m` calls
-`SDL_main` *synchronously from inside* `applicationDidFinishLaunching:`:
+**1. The main thread was never free to service marshalled work.** `SDLMain.m`
+called `SDL_main` *synchronously from inside* `applicationDidFinishLaunching:`:
 
 ```
 main → -[NSApplication run] → nextEventMatchingMask:
@@ -49,14 +32,61 @@ main → -[NSApplication run] → nextEventMatchingMask:
   → -[SDLMain applicationDidFinishLaunching:] → SDL_main
 ```
 
-`NSApp run` has therefore already claimed the main thread's event loop before
-`main_unix.cpp`'s own pump loop starts, and that loop is nested underneath it.
-Consequences:
+`-[NSApplication run]` had therefore already claimed the main thread's event
+loop, and `main_unix.cpp`'s own pump loop was nested underneath it. A block
+queued with `dispatch_sync(dispatch_get_main_queue(), ...)` is only drained when
+*our* run loop is the active one, which it never was — so the block was
+enqueued and never ran.
 
-* `dispatch_sync(dispatch_get_main_queue(), ...)` deadlocks — blocks on the main
-  queue are only drained when our run loop is the *active* one, and it never is.
-* `-nextEventMatchingMask:` is called by SDL's `Cocoa_PumpEventsUntilDate`, so
-  the main thread spends most of its time parked in AppKit's nested dispatch.
+**2. `frame_buffer_lock` was a mutex used as a cross-thread flag.** This is the
+part that produced the permanent hang, and it is worth recording precisely.
+
+`video_open()` took `LOCK_FRAME_BUFFER`; `video_close()` released it. Those two
+calls happen on **different threads**:
+
+* at startup, `VideoInit()` → `video_open()` runs on the **main** thread,
+  because it happens before the emulation thread exists;
+* a guest mode change runs `video_close()`/`video_open()` on the **emulation**
+  thread.
+
+An `SDL_mutex` belongs to the thread that locked it, so unlocking it from
+another thread left it corrupted: `SDL` then never satisfied the next lock and
+`video_open()` blocked forever in `SDL_LockMutex_REAL`. A per-thread lock-depth
+probe showed the failure exactly — the emulation thread ran `video_close`
+(depth 0), unlocked, then entered `video_open` at depth **−1**, i.e. "already
+held by a thread that does not hold it", and blocked there permanently while the
+main thread sat idle.
+
+The lock was never really expressing ownership. It expressed *"a video session
+is open"* — the redraw thread is alive and the frame buffer must not be touched
+elsewhere. That is a flag, not an owner.
+
+### The fix
+
+Three changes, all required:
+
+* **`BasiliskII/src/SDL/SDLMain.m`** — `applicationDidFinishLaunching:` now runs
+  `SDL_main`'s startup inline on the main thread and then **returns**, instead of
+  `exit()`ing. Returning hands the main thread to `-[NSApplication run]`, whose
+  run loop becomes the active one and can service AppKit work. SDL events are
+  pumped by an `NSTimer` (0.01 s) added here, since the pump loop that used to
+  live on the main thread is gone.
+
+* **`SheepShaver/src/Unix/main_unix.cpp`** — `SDL_main` now starts the emulation
+  on a worker thread and **returns** immediately (no pump loop, no
+  `pthread_join`), leaving `NSApp run` owning the main thread. Adds
+  `run_on_main_thread_blocking()`, which runs a block inline if already on the
+  main thread (`pthread_main_np()`) and otherwise `dispatch_sync`s it to the main
+  queue. Declared in `SheepShaver/src/include/main.h`.
+
+* **`BasiliskII/src/SDL/video_sdl.cpp`** — replaces `frame_buffer_lock` with a
+  `frame_buffer_held` flag guarded by its own mutex and signalled with a
+  condition variable (`frame_buffer_acquire()` / `frame_buffer_release()`). Any
+  thread may set or clear it, and the temporary give-up-and-retake in
+  `VideoVBL()`/`VideoInterrupt()` (a release followed by an acquire) behaves as
+  before. Also marshals **only** the `SDL_SetVideoMode()` call to the main
+  thread via `run_on_main_thread_blocking()`, with a `set_video_mode_reentering`
+  guard so a nested call runs directly rather than re-dispatching.
 
 ### Approaches already tried, and why they failed
 
@@ -68,7 +98,8 @@ All of these were tried and reverted. Recorded so they are not repeated.
    (`SDL_CreateThread(redraw_func)` in `video_open`, `SDL_WaitThread` +
    `UNLOCK_FRAME_BUFFER` in `video_close`). Moving the call moved the thread
    creation too, so the redraw thread was born on the main thread while the
-   emulation thread blocked on a lock that thread then owned.
+   emulation thread blocked on a lock that thread then owned. This is why the
+   fix marshals **only** `SDL_SetVideoMode`, never the surrounding `init()`.
 
 2. **Hand-rolling `CFRunLoopSourceContext`.** Crashed with `SIGSEGV` in
    `objc_lookUpImpOrForward`. The struct has **five** `void *` fields
@@ -77,25 +108,28 @@ All of these were tried and reverted. Recorded so they are not repeated.
    instead of 72, so CF called `cancel` as `release` when tearing the source
    down. Never hand-roll it — include `<CoreFoundation/CFRunLoop.h>`.
 
-3. **Marshalling only the `SDL_SetVideoMode` call via `dispatch_sync`, with the
-   main thread parked in `CFRunLoopRunInMode`.** Still deadlocked, now on
-   `video_open` → `LOCK_FRAME_BUFFER`. This proved the redraw thread was not the
-   whole story: the block was enqueued on the main queue and simply never ran,
-   because the main thread is inside AppKit's event loop (see above).
+3. **Marshalling only `SDL_SetVideoMode` via `dispatch_sync`, with the main
+   thread parked in `CFRunLoopRunInMode`.** Still deadlocked, now on
+   `video_open` → `LOCK_FRAME_BUFFER`. This proved the `SDLMain` lifecycle was
+   also broken: the block was enqueued on the main queue and simply never ran,
+   because the main thread was inside AppKit's event loop (problem 1 above).
 
-### What a real fix would look like
+### Notes for future work
 
-Stop letting `SDL_main` run inside AppKit's launch notification. Rework
-`BasiliskII/src/SDL/SDLMain.m` so `applicationDidFinishLaunching:` starts the
-emulator and returns, leaving `main()`'s own run loop owning the main thread.
-Then queued work can actually be serviced, and `SDL_SetVideoMode` can be called
-from the main thread. This changes startup for every guest, so it needs a clean
-boot test as well as a video-mode test.
+* `SDL_PumpEvents` must run on the main thread. Do **not** call
+  `pump_cocoa_events()` — it calls `[NSApp nextEventMatchingMask:]`, which steals
+  keyboard events from SDL2's queue (mouse arrives via `CGEventTap`, which is why
+  mouse worked but keyboard did not).
 
-### Related context
+* Startup must stay on the main thread: `prefs_init()` edits the main menu and
+  sets `NSApp`'s delegate, and off the main thread macOS 26+ throws
+  `NSInternalInconsistencyException: 'API misuse: modification of a menu's items
+  on a non-main thread when the menu is part of the main menu.'`
 
-The main thread currently does not drain `dispatch_get_main_queue()` at all.
-That matters independently of this bug: `objc_destructInstance()` queues to the
-main queue from whichever thread does the release, so autoreleased AppKit
-objects are affected too. Fixing the `SDLMain` lifecycle above would address
-both.
+* `ENABLE_VOSF` is **not** defined in this build, so `use_vosf` is `false` and
+  the refresh path is the incremental `video_refresh_window_static` /
+  `update_display_static_bbox` (memcmp against `the_buffer_copy`), not VOSF.
+
+* Signing must stay ad-hoc **without** `--options runtime`; the hardened runtime
+  makes dyld reject the vendored SDL dylibs (library validation / Team ID
+  mismatch) and the app dies at launch. See `build.sh`.

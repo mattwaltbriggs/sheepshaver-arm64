@@ -49,6 +49,13 @@ extern void Dump68kRegs(M68kRegisters *r);					// Dump 68k registers
 extern void MakeExecutable(int dummy, uint32 start, uint32 length);	// Make code executable
 extern void PatchAfterStartup(void);						// Patches after system startup
 extern void QuitEmulator(void);								// Quit emulator (must only be called from main thread)
+
+#ifdef __APPLE__
+// Run a block on the main thread and wait for it to finish. Defined in
+// main_unix.cpp; used to marshal main-thread-only work (SDL_SetVideoMode)
+// from the emulation thread.
+extern "C" void run_on_main_thread_blocking(void (^block)(void));
+#endif
 extern void ErrorAlert(const char *text);					// Display error alert
 extern void WarningAlert(const char *text);					// Display warning alert
 extern bool ChoiceAlert(const char *text, const char *pos, const char *neg);	// Display choice alert

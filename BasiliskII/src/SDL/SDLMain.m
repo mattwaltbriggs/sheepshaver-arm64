@@ -290,8 +290,6 @@ static void CustomApplicationMain (int argc, char **argv)
 /* Called when the internal event loop has just started running */
 - (void) applicationDidFinishLaunching: (NSNotification *) note
 {
-    int status;
-
     /* Set the working directory to the .app's parent directory */
     [self setupWorkingDirectory:gFinderLaunch];
 
@@ -300,12 +298,50 @@ static void CustomApplicationMain (int argc, char **argv)
     [self fixMenu:[NSApp mainMenu] withAppName:getApplicationName()];
 #endif
 
-    /* Hand off to main application code */
-    gCalledAppMainline = TRUE;
-    status = SDL_main (gArgc, gArgv);
+    // Run the emulator's startup HERE, on the main thread, then RETURN.
+    //
+    // SDL_main() must run its startup on the main thread: it calls prefs_init()
+    // (which edits the main menu and sets NSApp's delegate), it pops NSAlert
+    // error panels, and it calls SDL_SetVideoMode() to create the window. macOS
+    // 26+ hard-traps on any of those off the main thread, e.g.
+    //
+    //   'API misuse: modification of a menu's items on a non-main thread'
+    //   'Must only be used from the main thread'   (WindowManagement, SIGTRAP)
+    //
+    // The old code called SDL_main() inline and then exit()ed, so it never
+    // returned and no run loop of ours was ever the active one: work queued to
+    // the main queue was never drained, which made guest video-mode changes
+    // deadlock in SDL_SetVideoMode. SDL_main() has therefore been changed (see
+    // main_unix.cpp) to start the emulation on a worker thread and return, with
+    // the emulation still running. Returning hands the main thread to
+    // -[NSApplication run], whose run loop becomes the active one and can
+    // service AppKit work — which is what run_on_main_thread_blocking() needs to
+    // carry SDL_SetVideoMode over to the main thread.
+    //
+    // See KNOWN-ISSUES.md for the full analysis.
 
-    /* We're done, thank you for playing */
-    exit(status);
+    // SDL events must be pumped on the main thread (SDL's Cocoa backend drives
+    // -[NSApplication nextEventMatchingMask:]). SDL_main()'s loop used to do
+    // this, but that loop no longer runs on the main thread, so schedule it on
+    // the main run loop instead.
+    [NSTimer scheduledTimerWithTimeInterval:0.01
+                                     target:self
+                                   selector:@selector(pumpSDLEvents:)
+                                   userInfo:nil
+                                    repeats:YES];
+
+    gCalledAppMainline = TRUE;
+    SDL_main (gArgc, gArgv);
+
+    // Deliberately do NOT exit() here: returning lets -[NSApplication run] own
+    // the main thread as the active run loop. Teardown happens on the worker
+    // thread's quit path (Quit() → _exit()).
+}
+
+/* Pump SDL events on the main thread (see applicationDidFinishLaunching:). */
+- (void) pumpSDLEvents: (NSTimer *) timer
+{
+    SDL_PumpEvents();
 }
 @end
 

@@ -154,10 +154,47 @@ static SDL_mutex *sdl_palette_lock = NULL;
 #define LOCK_PALETTE SDL_LockMutex(sdl_palette_lock)
 #define UNLOCK_PALETTE SDL_UnlockMutex(sdl_palette_lock)
 
-// Mutex to protect frame buffer
-static SDL_mutex *frame_buffer_lock = NULL;
-#define LOCK_FRAME_BUFFER SDL_LockMutex(frame_buffer_lock)
-#define UNLOCK_FRAME_BUFFER SDL_UnlockMutex(frame_buffer_lock)
+// Frame buffer lock.
+//
+// This is NOT an ordinary lock: it is taken in video_open() and released in
+// video_close(), and those two calls happen on DIFFERENT threads. At startup,
+// VideoInit() -> video_open() runs on the main thread because it happens before
+// the emulation thread exists. A guest video-mode change, however, reaches
+// video_close() and video_open() on the emulation thread. An SDL mutex belongs
+// to the thread that locked it, so unlocking it from another thread leaves it
+// corrupted: SDL then never satisfies the next lock and video_open() hangs
+// forever waiting for it (observed as the emulation thread blocked in
+// SDL_LockMutex at video_open with the main thread idle).
+//
+// What the lock actually expresses is "a video session is open" — the redraw
+// thread is alive and the frame buffer must not be touched elsewhere. That is a
+// flag, not an owner, so it is modelled as one, guarded by its own mutex and
+// signalled with a condition variable. Any thread may set or clear it, and the
+// temporary give-up-and-retake in VideoVBL()/VideoInterrupt() (a release
+// followed by an acquire) behaves exactly as it did with the mutex.
+static SDL_mutex *frame_buffer_lock = NULL;	// guards frame_buffer_held
+static SDL_cond *frame_buffer_cond = NULL;
+static bool frame_buffer_held = false;
+
+static void frame_buffer_acquire(void)
+{
+	SDL_LockMutex(frame_buffer_lock);
+	while (frame_buffer_held)
+		SDL_CondWait(frame_buffer_cond, frame_buffer_lock);
+	frame_buffer_held = true;
+	SDL_UnlockMutex(frame_buffer_lock);
+}
+
+static void frame_buffer_release(void)
+{
+	SDL_LockMutex(frame_buffer_lock);
+	frame_buffer_held = false;
+	SDL_CondBroadcast(frame_buffer_cond);
+	SDL_UnlockMutex(frame_buffer_lock);
+}
+
+#define LOCK_FRAME_BUFFER frame_buffer_acquire()
+#define UNLOCK_FRAME_BUFFER frame_buffer_release()
 
 // Video refresh function
 static void VideoRefreshInit(void);
@@ -665,6 +702,16 @@ public:
 
 	bool init_ok;	// Initialization succeeded (we can't use exceptions because of -fomit-frame-pointer)
 	SDL_Surface *s;	// The surface we draw into
+
+	// Staging area for the marshalled SDL_SetVideoMode() call. The emulation
+	// thread fills these in, hops to the main thread, and reads back the
+	// result. Only one call can be in flight at a time (guarded by
+	// set_video_mode_reentering below).
+	int pending_width;
+	int pending_height;
+	int pending_depth;
+	int pending_flags;
+	SDL_Surface *pending_result;
 };
 
 #ifdef ENABLE_VOSF
@@ -683,15 +730,47 @@ driver_base::driver_base(SDL_monitor_desc &m)
 {
 	the_buffer = NULL;
 	the_buffer_copy = NULL;
+	pending_width = 0;
+	pending_height = 0;
+	pending_depth = 0;
+	pending_flags = 0;
+	pending_result = NULL;
 }
+
+// Guard against re-entering the marshalled set_video_mode from the main
+// thread (e.g. if a callback triggers another mode change). The nested call
+// runs directly rather than dispatching again.
+static bool set_video_mode_reentering = false;
 
 void driver_base::set_video_mode(int flags)
 {
-	int depth = sdl_depth_of_video_depth(VIDEO_MODE_DEPTH);
-	if ((s = SDL_SetVideoMode(VIDEO_MODE_X, VIDEO_MODE_Y, depth,
-			SDL_HWSURFACE | flags)) == NULL) {
-		return;
+	pending_width = VIDEO_MODE_X;
+	pending_height = VIDEO_MODE_Y;
+	pending_depth = sdl_depth_of_video_depth(VIDEO_MODE_DEPTH);
+	pending_flags = SDL_HWSURFACE | flags;
+	pending_result = NULL;
+
+	// SDL_SetVideoMode() must run on the main thread on macOS 26+: it talks to
+	// AppKit (window creation/resize), which hard-traps off the main thread.
+	// Guest video-mode changes reach here on the emulation thread, so marshal
+	// the call. Only the SDL_SetVideoMode() call is marshalled — the redraw
+	// thread creation and frame-buffer handoff in init() must stay on the
+	// emulation thread.
+	if (!set_video_mode_reentering) {
+		run_on_main_thread_blocking(^{
+			set_video_mode_reentering = true;
+			pending_result = SDL_SetVideoMode(pending_width, pending_height,
+					pending_depth, pending_flags);
+			set_video_mode_reentering = false;
+		});
+	} else {
+		pending_result = SDL_SetVideoMode(pending_width, pending_height,
+				pending_depth, pending_flags);
 	}
+
+	if ((s = pending_result) == NULL)
+		return;
+
 #ifdef ENABLE_VOSF
 	the_host_buffer = (uint8 *)s->pixels;
 #endif
@@ -1037,6 +1116,8 @@ bool VideoInit(bool classic)
 		return false;
 	if ((frame_buffer_lock = SDL_CreateMutex()) == NULL)
 		return false;
+	if ((frame_buffer_cond = SDL_CreateCond()) == NULL)
+		return false;
 
 	// Init keycode translation
 	keycode_init();
@@ -1253,6 +1334,8 @@ void VideoExit(void)
 		dynamic_cast<SDL_monitor_desc *>(*i)->video_close();
 
 	// Destroy locks
+	if (frame_buffer_cond)
+		SDL_DestroyCond(frame_buffer_cond);
 	if (frame_buffer_lock)
 		SDL_DestroyMutex(frame_buffer_lock);
 	if (sdl_palette_lock)

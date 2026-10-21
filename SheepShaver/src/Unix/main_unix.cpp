@@ -93,6 +93,25 @@
 #include <sys/param.h>
 #include <signal.h>
 
+#ifdef __APPLE__
+// CoreFoundation must be included before sysdeps.h: the Mac headers that
+// sysdeps.h pulls in define Point, Rect, noErr, OSErr and ProcPtr as macros,
+// which collide with the identically named symbols in CF's C API. Undefine
+// them around the CF include so both worlds can coexist.
+#define Point Point_macro
+#define Rect Rect_macro
+#define noErr noErr_macro
+#define OSErr OSErr_macro
+#define ProcPtr ProcPtr_macro
+#include <CoreFoundation/CFRunLoop.h>
+#undef Point
+#undef Rect
+#undef noErr
+#undef OSErr
+#undef ProcPtr
+#include <dispatch/dispatch.h>
+#endif
+
 #include "sysdeps.h"
 #include "main.h"
 #include "version.h"
@@ -284,6 +303,21 @@ static void sigabrt_handler(int sig);
 
 #ifdef __APPLE__
 extern "C" void pump_cocoa_events(void);
+
+// Run a block on the main thread and wait for it to finish. Used to marshal
+// main-thread-only work (notably SDL_SetVideoMode) from the emulation thread
+// to the main thread, whose run loop is -[NSApplication run].
+//
+// If we are already on the main thread, run the block directly to avoid
+// deadlocking on our own queue.
+extern "C" void run_on_main_thread_blocking(void (^block)(void))
+{
+	if (pthread_main_np())
+		block();
+	else
+		dispatch_sync(dispatch_get_main_queue(), block);
+}
+
 static volatile bool emul_func_done = false;
 static void *emul_func_wrapper(void *arg)
 {
@@ -1123,8 +1157,12 @@ int main(int argc, char **argv)
 	// Get my thread ID and execute MacOS thread function
 	D(bug("MacOS thread is %ld\n", pthread_self()));
 
-	// On macOS, run emul_func on a background thread so the main thread
-	// can pump Cocoa and SDL events (required for the app to stay responsive).
+	// On macOS, run emul_func on a background thread and RETURN, so that
+	// -[NSApplication run] owns the main thread's run loop. Work that macOS
+	// 26+ requires on the main thread (prefs_init(), NSAlert, and the
+	// SDL_SetVideoMode handled by run_on_main_thread_blocking()) is then
+	// serviced by that run loop. SDL events are pumped by an NSTimer
+	// installed in SDLMain's applicationDidFinishLaunching:.
 	emul_func_done = false;
 
 	pthread_t emul_worker;
@@ -1134,21 +1172,7 @@ int main(int argc, char **argv)
 	}
 	emul_thread = emul_worker;
 
-	// Main thread event loop: pump SDL events while emulation runs.
-	// SDL2 (via sdl12-compat) requires SDL_PumpEvents on the main thread.
-	// Do NOT call pump_cocoa_events() here — it calls [NSApp nextEventMatchingMask:]
-	// which steals keyboard events from SDL2's queue (keyboard routes through NSApp,
-	// mouse goes through CGEventTap, which is why mouse worked but keyboard didn't).
-	// The redraw thread handles consuming events and display refresh via
-	// do_video_refresh() → handle_events().
-	while (!emul_func_done) {
-#ifdef USE_SDL_VIDEO
-		SDL_PumpEvents();
-#endif
-		Delay_usec(10000); // 10ms
-	}
-
-	pthread_join(emul_worker, NULL);
+	return 0;
 
 quit:
 	Quit();
@@ -1166,12 +1190,11 @@ static void Quit(void)
 	if (quit_in_progress) return;
 	quit_in_progress = true;
 
-	// Signal main thread event loop to stop pumping SDL/Cocoa events
-	// BEFORE destroying any resources (prevents ADB/Video mutex races)
+	// Signal anything that waits on emul_func_done to stop.
 	emul_func_done = true;
 
-	// Give main thread time to exit the event loop (it checks emul_func_done
-	// every 10ms and may be mid-handle_events when we start destroying things)
+	// Give the main thread time to finish any in-flight marshalled work
+	// before we start destroying resources (prevents ADB/Video mutex races).
 	usleep(50000); // 50ms
 
 	fflush(stderr);
