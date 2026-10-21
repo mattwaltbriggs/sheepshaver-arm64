@@ -712,6 +712,23 @@ def vec(name):
             "emit_32(a64_bic_reg(A64_X17, A64_X17, A64_X9));",
             "emit_32(a64_orr_reg(A64_X17, A64_X17, A64_X16));",
             "emit_32(a64_str_w(A64_X17, A64_CPU, (uint32)kpx_jit_cr_offset(cpu())));")
+    if name == "gen_op_mfvscr_VD":
+        # VD = &VR[vD]; mfvscr zeroes w[0..2] and places VSCR in w[3].
+        # Mirrors execute_mfvscr() (ppc-execute.cpp) and op_mfvscr_VD().
+        return emit(
+            "emit_32(a64_ldr_w(A64_X16, A64_CPU, (uint32)kpx_jit_vscr_offset(cpu())));",
+            "emit_32(a64_str_w(A64_X16, A64_VD, 12));",
+            "emit_32(a64_movz_w(A64_X16, 0, 0));",
+            "emit_32(a64_str_w(A64_X16, A64_VD, 0));",
+            "emit_32(a64_str_w(A64_X16, A64_VD, 4));",
+            "emit_32(a64_str_w(A64_X16, A64_VD, 8));")
+    if name == "gen_op_mtvscr_V0":
+        # The x86 op is named _V0, but gen_vector_generic_1() loads only the
+        # source VR pointer (here vB) into VD, so read A64_VD, not A64_T0.
+        # VSCR = VR[vB].w[3] -- mirrors execute_mtvscr()/op_mtvscr_V0().
+        return emit(
+            "emit_32(a64_ldr_w(A64_X16, A64_VD, 12));",
+            "emit_32(a64_str_w(A64_X16, A64_CPU, (uint32)kpx_jit_vscr_offset(cpu())));")
     if name == "gen_op_load_vect_VD_T0":  return _vec_helper("kpx_op_load_vect")
     if name == "gen_op_store_vect_VD_T0": return _vec_helper("kpx_op_store_vect")
     if name == "gen_op_load_word_VD_T0":  return _vec_helper("kpx_op_load_word_vect")
@@ -812,7 +829,13 @@ def convert(src_path, dst_path, dst_name, is_basic):
     if is_basic: out.append(CST)
     real = 0
     for nm, args in ops:
-        out.append("\nDEFINE_GEN(%s,void,(%s))\n#ifdef DYNGEN_IMPL\n{\n" % (nm, args))
+        gate = "#ifdef DYNGEN_IMPL\n"
+        # The committed arm64 header carries the x86 dyngen tool's inert HAVE
+        # marker for spcflags_check; emit it too so regeneration reproduces
+        # the committed file exactly (nothing #ifdefs on it).
+        if nm == "gen_op_spcflags_check":
+            gate += "#define HAVE_gen_op_spcflags_check\n"
+        out.append("\nDEFINE_GEN(%s,void,(%s))\n%s{\n" % (nm, args, gate))
         b = body_for(nm)
         if b is not None:
             out.append(b); real += 1

@@ -441,6 +441,13 @@ unsigned long kpx_jit_vrsave_offset(void *cpu)
 {
 	return (unsigned long)((char *)&to_cpu(cpu)->jit_regs().vrsave - (char *)cpu);
 }
+unsigned long kpx_jit_vscr_offset(void *cpu)
+{
+	// powerpc_vscr is a single uint32 at offset 0 of itself, so the JIT can
+	// read/write it with a 32-bit LDR/STR at this offset and stay consistent
+	// with execute_mfvscr/execute_mtvscr, which go through vscr().get/set.
+	return (unsigned long)((char *)&to_cpu(cpu)->jit_regs().vscr - (char *)cpu);
+}
 unsigned long kpx_jit_fpr_offset(void *cpu, int i)
 {
 	return (unsigned long)((char *)&to_cpu(cpu)->jit_regs().fpr[i] - (char *)cpu);

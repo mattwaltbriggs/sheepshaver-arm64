@@ -178,7 +178,12 @@ DEFINE_GEN(gen_op_lmw_T0_im,void,(long param1))
 DEFINE_GEN(gen_op_mfvscr_VD,void,(void))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_mfvscr_VD");
+	emit_32(a64_ldr_w(A64_X16, A64_CPU, (uint32)kpx_jit_vscr_offset(cpu())));
+	emit_32(a64_str_w(A64_X16, A64_VD, 12));
+	emit_32(a64_movz_w(A64_X16, 0, 0));
+	emit_32(a64_str_w(A64_X16, A64_VD, 0));
+	emit_32(a64_str_w(A64_X16, A64_VD, 4));
+	emit_32(a64_str_w(A64_X16, A64_VD, 8));
 }
 #endif
 
@@ -195,7 +200,8 @@ DEFINE_GEN(gen_op_mmx_vandc,void,(void))
 DEFINE_GEN(gen_op_mtvscr_V0,void,(void))
 #ifdef DYNGEN_IMPL
 {
-	kpx_jit_unimplemented_op("gen_op_mtvscr_V0");
+	emit_32(a64_ldr_w(A64_X16, A64_VD, 12));
+	emit_32(a64_str_w(A64_X16, A64_CPU, (uint32)kpx_jit_vscr_offset(cpu())));
 }
 #endif
 

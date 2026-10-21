@@ -53,6 +53,7 @@ extern "C" unsigned long kpx_jit_xer_offset(void *cpu);
 extern "C" unsigned long kpx_jit_lr_offset(void *cpu);
 extern "C" unsigned long kpx_jit_ctr_offset(void *cpu);
 extern "C" unsigned long kpx_jit_vrsave_offset(void *cpu);
+extern "C" unsigned long kpx_jit_vscr_offset(void *cpu);
 
 // Runtime helpers called by generated code (arm64-helpers.cpp). Only their
 // addresses are taken here, so a forward declaration of powerpc_cpu suffices.
