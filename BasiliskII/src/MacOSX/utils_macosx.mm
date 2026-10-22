@@ -28,6 +28,7 @@
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 // This is used from video_sdl.cpp.
 void NSAutoReleasePool_wrap(void (*fn)(void))
@@ -53,6 +54,89 @@ bool macosx_display_alert(const char *title, const char *text, const char *first
 	NSInteger result = [alert runModal];
 	[pool release];
 	return result == NSAlertFirstButtonReturn;
+}
+
+// Show the alert in a way that never stops the run loop.
+//
+// -[NSAlert show] and -[NSAlert runModal] both run a modal session: the
+// main thread stays inside the modal loop and, worse, the main dispatch
+// queue is not serviced any more. The emulator runs its initialization on
+// the main thread and marshals SDL_SetVideoMode() to it, so a blocking
+// alert freezes the whole emulator (see KNOWN-ISSUES.md).
+//
+// A sheet attached to an existing window does not have that problem, and if
+// there is no window yet (the alert is shown while the emulator is still
+// starting up) the message goes into a window of its own.
+static void show_alert_panel(const char *title, const char *text)
+{
+	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+
+	@try {
+		NSString *message = title ? [NSString stringWithUTF8String:title] : @"SheepShaver";
+		NSString *informative = text ? [NSString stringWithUTF8String:text] : @"";
+
+		// Prefer a sheet on the emulator window: it stays clearly attached
+		// to the window it belongs to and does not stop the run loop.
+		NSWindow *parent = [NSApp mainWindow];
+		if (!parent) {
+			for (NSWindow *w in [NSApp windows]) {
+				if ([w isVisible]) {
+					parent = w;
+					break;
+				}
+			}
+		}
+
+		if (parent) {
+			NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+			[alert setAlertStyle:NSInformationalAlertStyle];
+			[alert setMessageText:message];
+			[alert setInformativeText:informative];
+			[alert addButtonWithTitle:@"OK"];
+			[alert beginSheetModalForWindow:parent completionHandler:nil];
+		} else {
+			// No window to attach the sheet to: use a window of our own
+			// instead of -[NSAlert show], which would block the run loop.
+			NSWindow *w = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 130)
+				styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
+				backing:NSBackingStoreBuffered defer:NO];
+			[w setTitle:message];
+			[w setReleasedWhenClosed:NO];
+
+			NSTextField *info = [[[NSTextField alloc] initWithFrame:NSMakeRect(16, 16, 388, 92)] autorelease];
+			[info setStringValue:informative];
+			[info setEditable:NO];
+			[info setSelectable:YES];
+			[info setBordered:NO];
+			[info setDrawsBackground:NO];
+			[w setContentView:info];
+
+			[w center];
+			[w makeKeyAndOrderFront:nil];
+		}
+	} @catch (NSException *e) {
+		fprintf(stderr, "Exception while showing alert: %s\n", [[e reason] UTF8String]);
+	}
+
+	[pool release];
+}
+
+// Displays a non-modal informational alert.
+//
+// This never blocks the caller: the work is always handed to the main
+// queue, so that the caller (which may be the emulator's initialization
+// code running on the main thread) can continue. See KNOWN-ISSUES.md.
+void macosx_post_alert(const char *title, const char *text)
+{
+	// Copy the strings: the block may run much later.
+	char *title_copy = title ? strdup(title) : NULL;
+	char *text_copy = text ? strdup(text) : NULL;
+
+	dispatch_async(dispatch_get_main_queue(), ^{
+		show_alert_panel(title_copy, text_copy);
+		free(title_copy);
+		free(text_copy);
+	});
 }
 
 #if SDL_VERSION_ATLEAST(2,0,0)

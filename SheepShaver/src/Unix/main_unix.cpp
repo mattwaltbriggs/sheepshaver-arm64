@@ -2597,7 +2597,10 @@ void WarningAlert(const char *text)
 #else
 #if defined(__APPLE__) && defined(__MACH__)
 	if (!isatty(STDOUT_FILENO)) {
-		macosx_display_alert(GetString(STR_WARNING_ALERT_TITLE), text, GetString(STR_OK_BUTTON), NULL);
+		// Show the warning without stopping the run loop: a modal alert
+		// would freeze the emulator's event pump and with it the keyboard.
+		macosx_post_alert(GetString(STR_WARNING_ALERT_TITLE), text);
+		fprintf(stderr, GetString(STR_SHELL_WARNING_PREFIX), text);
 		return;
 	}
 #endif

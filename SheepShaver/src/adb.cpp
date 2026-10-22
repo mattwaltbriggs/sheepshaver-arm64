@@ -25,6 +25,7 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "sysdeps.h"
 #include "cpu_emulation.h"
@@ -53,9 +54,27 @@ static uint8 key_states[16];				// Key states (Mac keycodes)
 #define MATRIX(code) (key_states[code >> 3] & (1 << (~code & 7)))
 
 // Keyboard event buffer (Mac keycodes with up/down flag)
-const int KEY_BUFFER_SIZE = 16;
+//
+// This ring is filled by ADBKeyDown()/ADBKeyUp() on the SDL event thread (the
+// main thread) and drained by ADBInterrupt() on the emulation thread. It is
+// deliberately oversized: at 16 entries a fast burst of typing could fill it
+// before the next 60 Hz interrupt ran, and the producer would then wrap over
+// unread entries, silently dropping key-ups (stuck/repeating keys).
+const int KEY_BUFFER_SIZE = 256;
 static uint8 key_buffer[KEY_BUFFER_SIZE];
 static unsigned int key_read_ptr = 0, key_write_ptr = 0;
+
+// Append a key event, dropping the oldest if the buffer is full so that the
+// newest state (in particular a key-up) is always delivered. Caller holds
+// key_lock.
+static void key_buffer_put(uint8 entry)
+{
+	const unsigned int next = (key_write_ptr + 1) % KEY_BUFFER_SIZE;
+	if (next == key_read_ptr)
+		key_read_ptr = (key_read_ptr + 1) % KEY_BUFFER_SIZE;	// full: drop oldest
+	key_buffer[key_write_ptr] = entry;
+	key_write_ptr = next;
+}
 
 static uint8 mouse_reg_3[2] = {0x63, 0x01};	// Mouse ADB register 3
 
@@ -67,6 +86,17 @@ static uint8 m_keyboard_type = 0x05;
 // ADB mouse motion lock (for platforms that use separate input thread)
 static B2_mutex *mouse_lock;
 
+// Keyboard event lock.
+//
+// The key ring buffer and the key-state matrix are written by ADBKeyDown() and
+// ADBKeyUp(), which on this platform are called from the SDL event-handling
+// thread (the main thread — see VideoHandleEvents in video_sdl.cpp), and read by
+// ADBInterrupt(), which runs on the emulation thread as part of the 60 Hz
+// interrupt. Without a lock the producer and consumer could interleave and
+// corrupt the pointers or drop events, which shows up in the guest as keys that
+// stick, repeat, or do nothing.
+static B2_mutex *key_lock;
+
 
 /*
  *  Initialize ADB emulation
@@ -75,6 +105,7 @@ static B2_mutex *mouse_lock;
 void ADBInit(void)
 {
 	mouse_lock = B2_create_mutex();
+	key_lock = B2_create_mutex();
 	m_keyboard_type = (uint8)PrefsFindInt32("keyboardtype");
 	key_reg_3[1] = m_keyboard_type;
 }
@@ -89,6 +120,10 @@ void ADBExit(void)
 	if (mouse_lock) {
 		B2_delete_mutex(mouse_lock);
 		mouse_lock = NULL;
+	}
+	if (key_lock) {
+		B2_delete_mutex(key_lock);
+		key_lock = NULL;
 	}
 }
 
@@ -188,22 +223,32 @@ void ADBOp(uint8 op, uint8 *data)
 				case 2: {	// LEDs/Modifiers
 					uint8 reg2hi = 0xff;
 					uint8 reg2lo = key_reg_2[1] | 0xf8;
-					if (MATRIX(0x6b))	// Scroll Lock
+					// Snapshot the key-state matrix under the lock. It is written
+					// by ADBKeyDown()/ADBKeyUp() on the main thread, so reading it
+					// piecemeal here could report a half-updated modifier state
+					// (e.g. Shift not yet set) to the guest.
+					uint8 ks[16];
+					B2_lock_mutex(key_lock);
+					memcpy(ks, key_states, sizeof(ks));
+					B2_unlock_mutex(key_lock);
+#define MATRIX_SNAP(code) (ks[code >> 3] & (1 << (~code & 7)))
+					if (MATRIX_SNAP(0x6b))	// Scroll Lock
 						reg2lo &= ~0x40;
-					if (MATRIX(0x47))	// Num Lock
+					if (MATRIX_SNAP(0x47))	// Num Lock
 						reg2lo &= ~0x80;
-					if (MATRIX(0x37))	// Command
+					if (MATRIX_SNAP(0x37))	// Command
 						reg2hi &= ~0x01;
-					if (MATRIX(0x3a))	// Option
+					if (MATRIX_SNAP(0x3a))	// Option
 						reg2hi &= ~0x02;
-					if (MATRIX(0x38))	// Shift
+					if (MATRIX_SNAP(0x38))	// Shift
 						reg2hi &= ~0x04;
-					if (MATRIX(0x36))	// Control
+					if (MATRIX_SNAP(0x36))	// Control
 						reg2hi &= ~0x08;
-					if (MATRIX(0x39))	// Caps Lock
+					if (MATRIX_SNAP(0x39))	// Caps Lock
 						reg2hi &= ~0x20;
-					if (MATRIX(0x75))	// Delete
+					if (MATRIX_SNAP(0x75))	// Delete
 						reg2hi &= ~0x40;
+#undef MATRIX_SNAP
 					data[0] = 2;
 					data[1] = reg2hi;
 					data[2] = reg2lo;
@@ -289,11 +334,12 @@ void ADBSetRelMouseMode(bool relative)
 void ADBKeyDown(int code)
 {
 	// Add keycode to buffer
-	key_buffer[key_write_ptr] = code;
-	key_write_ptr = (key_write_ptr + 1) % KEY_BUFFER_SIZE;
+	B2_lock_mutex(key_lock);
+	key_buffer_put(code);
 
 	// Set key in matrix
 	key_states[code >> 3] |= (1 << (~code & 7));
+	B2_unlock_mutex(key_lock);
 
 	// Trigger interrupt
 	SetInterruptFlag(INTFLAG_ADB);
@@ -308,11 +354,12 @@ void ADBKeyDown(int code)
 void ADBKeyUp(int code)
 {
 	// Add keycode to buffer
-	key_buffer[key_write_ptr] = code | 0x80;	// Key-up flag
-	key_write_ptr = (key_write_ptr + 1) % KEY_BUFFER_SIZE;
+	B2_lock_mutex(key_lock);
+	key_buffer_put(code | 0x80);	// Key-up flag
 
 	// Clear key in matrix
 	key_states[code >> 3] &= ~(1 << (~code & 7));
+	B2_unlock_mutex(key_lock);
 
 	// Trigger interrupt
 	SetInterruptFlag(INTFLAG_ADB);
@@ -436,11 +483,13 @@ void ADBInterrupt(void)
 	}
 
 	// Process accumulated keyboard events
+	B2_lock_mutex(key_lock);
 	while (key_read_ptr != key_write_ptr) {
 
 		// Read keyboard event
 		uint8 mac_code = key_buffer[key_read_ptr];
 		key_read_ptr = (key_read_ptr + 1) % KEY_BUFFER_SIZE;
+		B2_unlock_mutex(key_lock);
 
 		// Call keyboard ADB handler
 		WriteMacInt8(tmp_data, 2);
@@ -452,7 +501,10 @@ void ADBInterrupt(void)
 		r.a[3] = adb_base;
 		r.d[0] = (key_reg_3[0] << 4) | 0x0c;	// Talk 0
 		Execute68k(r.a[1], &r);
+
+		B2_lock_mutex(key_lock);
 	}
+	B2_unlock_mutex(key_lock);
 
 	// Clear temporary data
 	WriteMacInt32(tmp_data, 0);

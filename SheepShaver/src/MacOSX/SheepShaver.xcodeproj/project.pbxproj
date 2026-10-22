@@ -1331,7 +1331,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "sed -i '' 's/@PACKAGE_VERSION@/2.5.4/g' \"${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}\"\n";
+			shellScript = "sed -i '' 's/@PACKAGE_VERSION@/2.5.5/g' \"${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}\"\n";
 		};
 		1618630A300D4FF10085285F /* Run Script */ = {
 			isa = PBXShellScriptBuildPhase;

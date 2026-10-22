@@ -7,9 +7,12 @@
 
 #include "SDL.h"
 #include "SDLMain.h"
+#include "video_keys.h"
 #include <sys/param.h> /* for MAXPATHLEN */
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/time.h>
+#include <stdio.h>
 
 /* For some reaon, Apple removed setAppleMenu from the headers in 10.4,
  but the method still is there and works. To avoid warnings, we declare
@@ -323,12 +326,50 @@ static void CustomApplicationMain (int argc, char **argv)
     // SDL events must be pumped on the main thread (SDL's Cocoa backend drives
     // -[NSApplication nextEventMatchingMask:]). SDL_main()'s loop used to do
     // this, but that loop no longer runs on the main thread, so schedule it on
-    // the main run loop instead.
-    [NSTimer scheduledTimerWithTimeInterval:0.01
-                                     target:self
-                                   selector:@selector(pumpSDLEvents:)
-                                   userInfo:nil
-                                    repeats:YES];
+    // the main run loop instead. NSRunLoopCommonModes so that the timer also
+    // fires while a modal session (e.g. a sheet) is running.
+    NSTimer *pumpTimer = [NSTimer scheduledTimerWithTimeInterval:0.01
+                                                           target:self
+                                                         selector:@selector(pumpSDLEvents:)
+                                                         userInfo:nil
+                                                          repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:pumpTimer forMode:NSRunLoopCommonModes];
+
+    // Deliver the key events to the emulator directly.
+    //
+    // The SDL 1.2 keyboard path is unreliable on macOS: sdl12-compat
+    // translates the events of the SDL 2.0/3.0 layer into SDL 1.2 events,
+    // but SDL3's Cocoa backend defers key-down events to the text-input
+    // (IME) path and swallows the matching key-up events whenever the
+    // key-down never arrives. Most keystrokes were therefore lost, and the
+    // ones that did arrive left the guest with keys stuck down.
+    //
+    // The AppKit level gives us every key event promptly and in order, so we
+    // use it as the source of truth and let the video driver turn them into
+    // Mac keyboard codes. See KNOWN-ISSUES.md.
+    VideoSetNativeKeyboard(1);
+    [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged)
+                                          handler:^NSEvent *(NSEvent *event) {
+        NSEventModifierFlags flags = [event modifierFlags];
+        unsigned int mods = 0;
+        if (flags & NSEventModifierFlagShift)    mods |= VK_SHIFT;
+        if (flags & NSEventModifierFlagControl)  mods |= VK_CONTROL;
+        if (flags & NSEventModifierFlagOption)   mods |= VK_OPTION;
+        if (flags & NSEventModifierFlagCommand)  mods |= VK_COMMAND;
+        if (flags & NSEventModifierFlagCapsLock) mods |= VK_CAPSLOCK;
+
+        if ([event type] == NSEventTypeFlagsChanged) {
+            // Only the modifier state changed. Report it with an invalid key
+            // code so that the video driver only synchronizes the modifiers.
+            VideoHandleKeyEvent(VK_NO_KEY, 0, 0, mods);
+        } else {
+            VideoHandleKeyEvent((unsigned int)[event keyCode],
+                                [event type] == NSEventTypeKeyDown ? 1 : 0,
+                                [event isARepeat] ? 1 : 0,
+                                mods);
+        }
+        return event;
+    }];
 
     gCalledAppMainline = TRUE;
     SDL_main (gArgc, gArgv);
@@ -338,10 +379,18 @@ static void CustomApplicationMain (int argc, char **argv)
     // thread's quit path (Quit() → _exit()).
 }
 
-/* Pump SDL events on the main thread (see applicationDidFinishLaunching:). */
+/* Pump SDL events and process them on the main thread (see
+   applicationDidFinishLaunching:).
+
+   SDL events must both be pumped and drained on the same thread, and that
+   thread must be the one SDL considers "main". Under sdl12-compat that is the
+   thread that called SDL_SetVideoMode(), which for us is the main thread (the
+   video-mode fix marshals it here). Pumping here but draining on the redraw
+   thread lost key-up events (stuck/repeating keys), dropped input, and
+   delivered events out of order. */
 - (void) pumpSDLEvents: (NSTimer *) timer
 {
-    SDL_PumpEvents();
+    VideoHandleEvents();
 }
 @end
 

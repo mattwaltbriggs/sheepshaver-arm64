@@ -4,6 +4,153 @@ Note: for the upstream project, see the README. This file records problems
 specific to the Apple-silicon build on current macOS, with enough analysis that a
 future fix does not have to rediscover it.
 
+## Guest keyboard input (fixed in 2.5.5)
+
+**Was.** Typing in the guest was badly broken: key presses were dropped,
+repeats and stuck keys appeared, Backspace/Delete behaved incorrectly, and
+sometimes the wrong character came out. The keyboard was effectively
+unusable.
+
+**Fixed in 2.5.5** by taking the keyboard away from SDL and reading macOS
+`NSEvent`s directly.
+
+### Root cause
+
+The emulator still links the SDL 1.2 API (`libSDL-1.2.0.dylib` →
+`libSDL2-2.0.0.dylib` → SDL3 3.4.18), and the keyboard travelled the whole
+way through that stack:
+
+1. **sdl12-compat** has a fixed event pool of `SDL12_MAXEVENTS` (128).
+   `SDL_PushEvent_locked()` returns −1 when the pool is full, i.e. events are
+   **dropped silently**.
+2. **sdl2-compat** translates SDL2 events to SDL3 ones, again through a
+   queue.
+3. **SDL3's** Cocoa backend does not send `SDL_KEYDOWN` the way one expects:
+   it goes through the text-input path (`setPendingKey:` →
+   `interpretKeyEvents:` → `insertText:` → `sendPendingKey`) while `SDL_KEYUP`
+   is sent unconditionally. `SDL_SendKeyboardKeyInternal()` swallows a `KEYUP`
+   when `keystate[scancode]` is already false, so a dropped `KEYDOWN`
+   turns into a **stuck or repeating key**.
+
+Measured on this machine: roughly **80 % of all key events were lost**, and
+the ones that got through were delayed by up to 18 s. AppKit's own
+`NSEvent` delivery, in contrast, was prompt and complete.
+
+### The fix
+
+* **`BasiliskII/src/SDL/video_keys.h`** (new) — shared declarations for the
+  native keyboard path (`VK_*` modifier bits and the C-linkage entry points
+  `VideoHandleEvents`, `VideoHandleKeyEvent`, `VideoSetNativeKeyboard`).
+  `BasiliskII/src/include/video.h` cannot be used for this: it is C++-only
+  and in this build the *copy* in `SheepShaver/src/include/video.h` is the
+  one that is included.
+
+* **`BasiliskII/src/SDL/SDLMain.m`** — installs an `NSEvent` local monitor for
+  `KeyDown | KeyUp | FlagsChanged` and calls `VideoSetNativeKeyboard(1)`.
+  The monitor is installed before `SDL_main` starts, so no key press is
+  missed. The `NSTimer` that pumps SDL events is registered in
+  `NSRunLoopCommonModes` so that it keeps firing during modal sessions.
+
+* **`BasiliskII/src/SDL/video_sdl.cpp`** — `VideoHandleKeyEvent()` translates
+  the macOS virtual key code to an ADB key code and calls `ADBKeyDown()` /
+  `ADBKeyUp()`. Notable details:
+
+  * `NSEvent.isARepeat` is ignored: the guest does its own key repeat.
+  * The modifier keys are reported as ordinary ADB key codes (0x36–0x3a),
+    which is what the SDL 1.2 path did and what the guest's ADB manager
+    expects. `NSEvent.modifierFlags` drives them.
+  * Caps Lock is a **toggle**: the guest flips its caps state when it sees
+    the key *press* of 0x39, so every change of the modifier flag is
+    reported as a complete press/release pair — again exactly what the
+    SDL 1.2 path did.
+  * The hotkeys (Ctrl-Tab suspend, Ctrl-Return fullscreen, Ctrl-Esc quit,
+    Ctrl-F1 mount floppy, Ctrl-F5 grab mouse, Ctrl-Space resume) are
+    recognised on the key *press* and the key is then **swallowed**, so it
+    can never get stuck in the guest's key state. The matching key release
+    is swallowed as well.
+  * The generic SDL 1.2 key path is left intact for Linux/Windows. On
+    macOS the `native_keyboard` flag makes `handle_events()` skip
+    `SDL_KEYDOWN`/`SDL_KEYUP` so that nothing is delivered twice, and
+    `SDL_EventState()` is used to keep the events out of the queue in the
+    first place.
+
+* **`SheepShaver/src/adb.cpp`** — the ADB key ring was made thread-safe
+  (`key_lock`; producer = main thread, consumer = emulation thread in
+  `ADBInterrupt()`) and enlarged from 16 to 256 entries with oldest-first
+  overflow, so that a burst of typing can no longer overflow it between
+  two 60 Hz interrupts.
+
+### Note
+
+`pump_cocoa_events()` must **not** be called: it calls
+`[NSApp nextEventMatchingMask:]`, which steals keyboard events (see the
+notes at the end of this file).
+
+## Audio device failure freezes the emulator (fixed in 2.5.5)
+
+**Was.** On a machine where the CoreAudio output device cannot be opened
+(see below), the emulator did not start at all: it showed an alert and then
+sat there, dead, with no window and no keyboard.
+
+### Root cause
+
+`open_sdl_audio()` fails, `WarningAlert()` is called, and `WarningAlert()`
+ends up in `macosx_display_alert()`, which runs `[alert runModal]`.
+
+The emulator's whole initialization runs on the **main thread** inside
+`SDL_main` (`InitAll()` → `AudioInit()` → `WarningAlert()`), so a modal
+alert there stops the initialization: the SDL window is never created, the
+emulation thread is never started, and the app looks hung.
+
+`macosx_post_alert()` was introduced to avoid this, but it still used
+`-[NSAlert show]` for the "no parent window yet" case — and `-[NSAlert show]`
+behaves like `runModal`: it runs a modal session. Verified with a 60-line
+AppKit test program: after `[alert show]`, the main thread never returns
+from the call **and the main dispatch queue is not serviced any more**
+(a `dispatch_async` block queued afterwards never ran, and a
+`dispatch_sync` from another thread hung). The emulator marshals
+`SDL_SetVideoMode()` to the main queue with `dispatch_sync`, so this is
+fatal even when the alert itself is dismissed.
+
+### The fix
+
+* **`BasiliskII/src/MacOSX/utils_macosx.mm`** — `macosx_post_alert()` now
+  *always* hands the work to the main queue with `dispatch_async()`, so the
+  caller (which may be the main thread in the middle of the initialization)
+  continues immediately, and the alert is shown as a **sheet** on an
+  existing window. A sheet does not stop the run loop. If there is no
+  window yet, the message is put into a window of its own instead of
+  using `-[NSAlert show]`.
+* **`SheepShaver/src/Unix/main_unix.cpp`** — `WarningAlert()` uses
+  `macosx_post_alert()` and additionally writes the message to stderr, so
+  the warning is visible in `~/Library/Logs/SheepShaver.log` even if the
+  window is missed.
+
+Result: with the audio device unavailable the emulator now boots and runs
+(silently), and the warning is only informational.
+
+### The CoreAudio failure itself (not fixed — it is an OS problem)
+
+The error seen on this machine is
+
+```
+WARNING: Cannot open audio: CoreAudio error (AudioQueueStart): 2003329396
+```
+
+`'what'` 2003329396 is `HALC_ShellDriverPlugIn::Open: opening the plug-in
+failed`: macOS' own `AppleHDAEngineOutput` factory
+(`F8BB1C28-BAE8-11D6-9C31-00039315CD46`) cannot be opened. The failure is
+**intermittent** — the same binary boots with working sound minutes later —
+and it is not caused by the emulator: the released 2.5.4 build fails
+identically. Third-party audio drivers installed on this machine
+(`BlackHole2ch.driver`, `MSTeamsAudioDevice.driver`, `ZoomAudioDevice.driver`)
+are a likely contributor; `afplay` (which uses AUHAL instead of AudioQueue)
+keeps working.
+
+Things worth trying on the affected machine: `sudo killall coreaudiod`,
+remove any Multi-Output Device / BlackHole Multi-Output from *Audio MIDI
+Setup*, or reboot. Until then, the emulator runs without sound.
+
 ## Guest video-mode changes (fixed in 2.5.4)
 
 **Was.** A guest application that changed video mode (e.g. SimCity 2000 at

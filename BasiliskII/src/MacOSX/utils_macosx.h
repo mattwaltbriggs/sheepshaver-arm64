@@ -27,4 +27,8 @@ void NSAutoReleasePool_wrap(void (*fn)(void));
 // Displays a native modal alert. Returns true when the first button is pressed.
 bool macosx_display_alert(const char *title, const char *text, const char *first_button, const char *second_button);
 
+// Displays a non-modal informational alert. The run loop keeps running, so
+// the emulator stays usable while the alert is on screen.
+void macosx_post_alert(const char *title, const char *text);
+
 #endif

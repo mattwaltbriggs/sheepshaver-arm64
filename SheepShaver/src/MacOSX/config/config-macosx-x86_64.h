@@ -424,7 +424,7 @@
 #define PACKAGE_URL ""
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "2.5.4"
+#define PACKAGE_VERSION "2.5.5"
 
 /* Define if the __PAGEZERO Mach-O Low Memory Globals hack works on this
    system. */

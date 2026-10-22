@@ -59,6 +59,7 @@
 #include "video.h"
 #include "video_defs.h"
 #include "video_blit.h"
+#include "video_keys.h"
 #include "vm_alloc.h"
 
 #define DEBUG 0
@@ -108,7 +109,10 @@ static uint32 framebuffer_guest_base = 0;
 static uint32 framebuffer_guest_size = 0;
 #endif
 
-static bool redraw_thread_active = false;			// Flag: Redraw thread installed
+// Flag: Redraw thread installed. Volatile because it is written on the
+// emulation thread (video_open()/video_close()) and read on the main thread
+// (VideoHandleEvents) as well as on the emulation thread (VideoRefresh).
+static volatile bool redraw_thread_active = false;
 #ifndef USE_CPU_EMUL_SERVICES
 static volatile bool redraw_thread_cancel;			// Flag: Cancel Redraw thread
 static SDL_Thread *redraw_thread = NULL;			// Redraw thread
@@ -124,6 +128,7 @@ static const bool use_vosf = false;					// VOSF not possible
 
 static bool ctrl_down = false;						// Flag: Ctrl key pressed
 static bool caps_on = false;						// Flag: Caps Lock on
+static bool native_keyboard = false;				// Flag: Key events come from the platform layer
 static bool quit_full_screen = false;				// Flag: DGA close requested from redraw thread
 static bool emerg_quit = false;						// Flag: Ctrl-Esc pressed, emergency quit requested from MacOS thread
 static bool emul_suspended = false;					// Flag: Emulator suspended
@@ -143,6 +148,17 @@ static const int sdl_eventmask = SDL_MOUSEEVENTMASK | SDL_KEYEVENTMASK | SDL_VID
 
 static bool mouse_grabbed = false;
 static bool mouse_grabbed_window_name_status = false;
+
+// Emulator suspend/resume and mouse-grab helpers.
+//
+// These are free functions rather than driver_base methods because the SDL
+// event handler runs on the main thread (see VideoHandleEvents), while the
+// driver object is created and destroyed on the emulation thread during a
+// guest video-mode change. Dereferencing "drv" from the event handler would
+// race with that, so the event path must not touch it.
+static void suspend_emulator(void);
+static void resume_emulator(void);
+static void toggle_mouse_grab(void);
 
 // Mutex to protect SDL events
 static SDL_mutex *sdl_events_lock = NULL;
@@ -609,6 +625,50 @@ static SDL_GrabMode set_grab_mode(SDL_GrabMode mode)
 	return (vi && vi->wm_available ? SDL_WM_GrabInput(mode) : SDL_GRAB_OFF);
 }
 
+// Grab mouse, switch to relative mouse mode
+static void grab_mouse(void)
+{
+	if (!mouse_grabbed) {
+		SDL_GrabMode new_mode = set_grab_mode(SDL_GRAB_ON);
+		if (new_mode == SDL_GRAB_ON)
+			mouse_grabbed = true;
+	}
+}
+
+// Ungrab mouse, switch to absolute mouse mode
+static void ungrab_mouse(void)
+{
+	if (mouse_grabbed) {
+		SDL_GrabMode new_mode = set_grab_mode(SDL_GRAB_OFF);
+		if (new_mode == SDL_GRAB_OFF)
+			mouse_grabbed = false;
+	}
+}
+
+// Toggle mouse grab
+static void toggle_mouse_grab(void)
+{
+	if (mouse_grabbed)
+		ungrab_mouse();
+	else
+		grab_mouse();
+}
+
+// Suspend/resume the emulator.
+//
+// The SDL driver has never had a working suspend/resume (driver_base::suspend()
+// and driver_base::resume() have always been empty), so these preserve the
+// existing behaviour: they only track the flag.
+static void suspend_emulator(void)
+{
+	emul_suspended = true;
+}
+
+static void resume_emulator(void)
+{
+	emul_suspended = false;
+}
+
 // Migrate preferences items (XXX to be handled in MigratePrefs())
 static void migrate_screen_prefs(void)
 {
@@ -932,21 +992,15 @@ void driver_base::restore_mouse_accel(void)
 // Toggle mouse grab
 void driver_base::toggle_mouse_grab(void)
 {
-	if (mouse_grabbed)
-		ungrab_mouse();
-	else
-		grab_mouse();
+	::toggle_mouse_grab();
 }
 
 // Grab mouse, switch to relative mouse mode
 void driver_base::grab_mouse(void)
 {
 	if (!mouse_grabbed) {
-		SDL_GrabMode new_mode = set_grab_mode(SDL_GRAB_ON);
-		if (new_mode == SDL_GRAB_ON) {
-			disable_mouse_accel();
-			mouse_grabbed = true;
-		}
+		disable_mouse_accel();
+		::grab_mouse();
 	}
 }
 
@@ -954,11 +1008,8 @@ void driver_base::grab_mouse(void)
 void driver_base::ungrab_mouse(void)
 {
 	if (mouse_grabbed) {
-		SDL_GrabMode new_mode = set_grab_mode(SDL_GRAB_OFF);
-		if (new_mode == SDL_GRAB_OFF) {
-			restore_mouse_accel();
-			mouse_grabbed = false;
-		}
+		restore_mouse_accel();
+		::ungrab_mouse();
 	}
 }
 
@@ -1748,7 +1799,7 @@ static int kc_decode(SDL_keysym const & ks, bool key_down)
 	case SDLK_9: return 0x19;
 	case SDLK_0: return 0x1d;
 
-	case SDLK_BACKQUOTE: return 0x0a;
+	case SDLK_BACKQUOTE: return 0x32;
 	case SDLK_MINUS: case SDLK_UNDERSCORE: return 0x1b;
 	case SDLK_EQUALS: case SDLK_PLUS: return 0x18;
 	case SDLK_LEFTBRACKET: return 0x21;
@@ -1760,7 +1811,7 @@ static int kc_decode(SDL_keysym const & ks, bool key_down)
 	case SDLK_PERIOD: case SDLK_GREATER: return 0x2f;
 	case SDLK_SLASH: case SDLK_QUESTION: return 0x2c;
 
-	case SDLK_TAB: if (is_ctrl_down(ks)) {if (!key_down) drv->suspend(); return -2;} else return 0x30;
+	case SDLK_TAB: if (is_ctrl_down(ks)) {if (!key_down) suspend_emulator(); return -2;} else return 0x30;
 	case SDLK_RETURN: if (is_ctrl_down(ks)) {if (!key_down) toggle_fullscreen = true; return -2;} else return 0x24;
 	case SDLK_SPACE: return 0x31;
 	case SDLK_BACKSPACE: return 0x33;
@@ -1804,7 +1855,7 @@ static int kc_decode(SDL_keysym const & ks, bool key_down)
 	case SDLK_F2: return 0x78;
 	case SDLK_F3: return 0x63;
 	case SDLK_F4: return 0x76;
-	case SDLK_F5: if (is_ctrl_down(ks)) {if (!key_down) drv->toggle_mouse_grab(); return -2;} else return 0x60;
+	case SDLK_F5: if (is_ctrl_down(ks)) {if (!key_down) toggle_mouse_grab(); return -2;} else return 0x60;
 	case SDLK_F6: return 0x61;
 	case SDLK_F7: return 0x62;
 	case SDLK_F8: return 0x64;
@@ -1844,6 +1895,296 @@ static int event2keycode(SDL_KeyboardEvent const &ev, bool key_down)
 	return kc_decode(ev.keysym, key_down);
 }
 
+/*
+ *  Native keyboard input (macOS)
+ *
+ *  The SDL 1.2 keyboard path is unreliable on macOS: sdl12-compat translates
+ *  the events of the SDL 2.0/3.0 layer into SDL 1.2 events, but SDL3's Cocoa
+ *  backend defers key-down events to the text-input (IME) path and swallows
+ *  the matching key-up events whenever the key-down never arrives. The net
+ *  effect is that most keystrokes are lost and the ones that do get through
+ *  leave the guest with keys stuck down. See KNOWN-ISSUES.md.
+ *
+ *  The AppKit layer therefore hands us the key events directly (see
+ *  SDLMain.m). NSEvent.keyCode is the macOS virtual key code, which for the
+ *  standard keyboard layout is identical to the classic Mac keyboard code,
+ *  except for the modifier, function and navigation keys (see the table
+ *  below).
+ */
+
+// Mac virtual key code -> Mac keyboard code (ADB)
+static int mac_virtual_to_adb(unsigned int vkey)
+{
+	switch (vkey) {
+	case 0x00: return 0x00;		// A
+	case 0x01: return 0x01;		// S
+	case 0x02: return 0x02;		// D
+	case 0x03: return 0x03;		// F
+	case 0x04: return 0x04;		// H
+	case 0x05: return 0x05;		// G
+	case 0x06: return 0x06;		// Z
+	case 0x07: return 0x07;		// X
+	case 0x08: return 0x08;		// C
+	case 0x09: return 0x09;		// V
+	case 0x0a: return 0x32;		// ISO section (grave on ISO layouts)
+	case 0x0b: return 0x0b;		// B
+	case 0x0c: return 0x0c;		// Q
+	case 0x0d: return 0x0d;		// W
+	case 0x0e: return 0x0e;		// E
+	case 0x0f: return 0x0f;		// R
+	case 0x10: return 0x10;		// Y
+	case 0x11: return 0x11;		// T
+	case 0x12: return 0x12;		// 1
+	case 0x13: return 0x13;		// 2
+	case 0x14: return 0x14;		// 3
+	case 0x15: return 0x15;		// 4
+	case 0x16: return 0x16;		// 6
+	case 0x17: return 0x17;		// 5
+	case 0x18: return 0x18;		// =
+	case 0x19: return 0x19;		// 9
+	case 0x1a: return 0x1a;		// 7
+	case 0x1b: return 0x1b;		// -
+	case 0x1c: return 0x1c;		// 8
+	case 0x1d: return 0x1d;		// 0
+	case 0x1e: return 0x1e;		// ]
+	case 0x1f: return 0x1f;		// O
+	case 0x20: return 0x20;		// U
+	case 0x21: return 0x21;		// [
+	case 0x22: return 0x22;		// I
+	case 0x23: return 0x23;		// P
+	case 0x24: return 0x24;		// Return
+	case 0x25: return 0x25;		// L
+	case 0x26: return 0x26;		// J
+	case 0x27: return 0x27;		// '
+	case 0x28: return 0x28;		// K
+	case 0x29: return 0x29;		// ;
+	case 0x2a: return 0x2a;		// backslash
+	case 0x2b: return 0x2b;		// ,
+	case 0x2c: return 0x2c;		// /
+	case 0x2d: return 0x2d;		// N
+	case 0x2e: return 0x2e;		// M
+	case 0x2f: return 0x2f;		// .
+	case 0x30: return 0x30;		// Tab
+	case 0x31: return 0x31;		// Space
+	case 0x32: return 0x32;		// `
+	case 0x33: return 0x33;		// Delete (backspace)
+	case 0x35: return 0x35;		// Escape
+	case 0x36: return 0x37;		// Right Command
+	case 0x37: return 0x37;		// Command
+	case 0x38: return 0x38;		// Shift
+	case 0x39: return 0x39;		// Caps Lock
+	case 0x3a: return 0x3a;		// Option
+	case 0x3b: return 0x36;		// Control
+	case 0x3c: return 0x38;		// Right Shift
+	case 0x3d: return 0x3a;		// Right Option
+	case 0x3e: return 0x36;		// Right Control
+	case 0x41: return 0x41;		// Keypad .
+	case 0x43: return 0x43;		// Keypad *
+	case 0x45: return 0x45;		// Keypad +
+	case 0x47: return 0x47;		// Keypad Clear
+	case 0x4b: return 0x4b;		// Keypad /
+	case 0x4c: return 0x4c;		// Keypad Enter
+	case 0x4e: return 0x4e;		// Keypad -
+	case 0x51: return 0x51;		// Keypad =
+	case 0x52: return 0x52;		// Keypad 0
+	case 0x53: return 0x53;		// Keypad 1
+	case 0x54: return 0x54;		// Keypad 2
+	case 0x55: return 0x55;		// Keypad 3
+	case 0x56: return 0x56;		// Keypad 4
+	case 0x57: return 0x57;		// Keypad 5
+	case 0x58: return 0x58;		// Keypad 6
+	case 0x59: return 0x59;		// Keypad 7
+	case 0x5b: return 0x5b;		// Keypad 8
+	case 0x5c: return 0x5c;		// Keypad 9
+	case 0x60: return 0x60;		// F5
+	case 0x61: return 0x61;		// F6
+	case 0x62: return 0x62;		// F7
+	case 0x63: return 0x63;		// F3
+	case 0x64: return 0x64;		// F8
+	case 0x65: return 0x65;		// F9
+	case 0x66: return 0x6d;		// F10
+	case 0x67: return 0x67;		// F11
+	case 0x69: return 0x69;		// F13
+	case 0x6b: return 0x6b;		// F14
+	case 0x6f: return 0x6f;		// F12
+	case 0x71: return 0x71;		// F15
+	case 0x72: return 0x72;		// Help (Insert)
+	case 0x73: return 0x73;		// Home
+	case 0x74: return 0x74;		// Page Up
+	case 0x75: return 0x75;		// Forward Delete
+	case 0x76: return 0x76;		// F4
+	case 0x77: return 0x77;		// End
+	case 0x78: return 0x78;		// F2
+	case 0x79: return 0x79;		// Page Down
+	case 0x7a: return 0x7a;		// F1
+	case 0x7b: return 0x3b;		// Left arrow
+	case 0x7c: return 0x3c;		// Right arrow
+	case 0x7d: return 0x3d;		// Down arrow
+	case 0x7e: return 0x3e;		// Up arrow
+	}
+	return -1;
+}
+
+// Modifier state as last reported by the platform layer
+static unsigned int native_modifiers = 0;
+
+// Key that was swallowed by a hotkey. Its key-up event is swallowed as well,
+// so that the guest never sees an unbalanced key press.
+static unsigned int native_hotkey_key = VK_NO_KEY;
+
+// Report modifier changes to the guest.
+//
+// The classic Mac keyboard sends the modifier keys as ordinary keyboard codes
+// (0x36-0x3a). The guest's ADB manager tracks them in its global key state
+// and uses that to build the shifted characters, so they have to be reported
+// exactly like the SDL 1.2 keyboard path did.
+//
+// Caps Lock is a toggle key: the guest flips its caps state when it sees the
+// key press of 0x39, so every change is reported as a complete press/release
+// pair (which is what the SDL 1.2 path did as well).
+static void sync_native_modifiers(unsigned int modifiers)
+{
+	static const struct {
+		unsigned int bit;
+		int adb_code;
+	} mod_map[] = {
+		{ VK_SHIFT,    0x38 },
+		{ VK_CONTROL,  0x36 },
+		{ VK_OPTION,   0x3a },
+		{ VK_COMMAND,  0x37 },
+	};
+	const unsigned int n = sizeof(mod_map) / sizeof(mod_map[0]);
+
+	for (unsigned int i = 0; i < n; i++) {
+		const bool now = (modifiers & mod_map[i].bit) != 0;
+		const bool was = (native_modifiers & mod_map[i].bit) != 0;
+		if (now == was)
+			continue;
+		if (emul_suspended) {
+			// The guest is not running, so it did not see the key press
+			// either. Send the release anyway to keep its key state sane.
+			if (!now)
+				ADBKeyUp(mod_map[i].adb_code);
+			continue;
+		}
+		if (now)
+			ADBKeyDown(mod_map[i].adb_code);
+		else
+			ADBKeyUp(mod_map[i].adb_code);
+	}
+
+	// Caps Lock: one toggle per change of the state
+	const bool caps_now = (modifiers & VK_CAPSLOCK) != 0;
+	const bool caps_was = (native_modifiers & VK_CAPSLOCK) != 0;
+	if (caps_now != caps_was && !emul_suspended) {
+		ADBKeyDown(0x39);
+		ADBKeyUp(0x39);
+	}
+
+	native_modifiers = modifiers;
+}
+
+// Handle a key event delivered by the platform layer (C linkage: called from
+// SDLMain.m, which is Objective-C).
+extern "C" void VideoHandleKeyEvent(unsigned int keycode, int down, int is_repeat, unsigned int modifiers)
+{
+	// Don't deliver keys before the emulator is up and running (the video
+	// driver opens the guest window before the emulation starts).
+	if (!redraw_thread_active)
+		return;
+
+	// The guest performs its own key repeat, so ignore the auto-repeat
+	// events macOS generates for held keys. The SDL 1.2 keyboard path did
+	// the same.
+	if (is_repeat)
+		return;
+
+	// Bring the modifier state up to date first, so that e.g. Shift is
+	// already reported as pressed when the "A" key goes down.
+	sync_native_modifiers(modifiers);
+
+	// Only the modifier state changed, no key was pressed or released.
+	if (keycode == VK_NO_KEY)
+		return;
+
+	const bool ctrl = (modifiers & VK_CONTROL) != 0;
+
+	if (down) {
+		// This is a plain key press unless it is one of the hotkeys.
+		native_hotkey_key = VK_NO_KEY;
+		if (ctrl) {
+			switch (keycode) {
+			case 0x30:		// Tab
+				suspend_emulator();
+				native_hotkey_key = keycode;
+				return;
+			case 0x24:		// Return
+				toggle_fullscreen = true;
+				native_hotkey_key = keycode;
+				return;
+			case 0x35:		// Escape
+				quit_full_screen = true;
+				emerg_quit = true;
+				native_hotkey_key = keycode;
+				return;
+			case 0x7a:		// F1
+				SysMountFirstFloppy();
+				native_hotkey_key = keycode;
+				return;
+			case 0x60:		// F5
+				toggle_mouse_grab();
+				native_hotkey_key = keycode;
+				return;
+			}
+		}
+	} else if (keycode == native_hotkey_key) {
+		// Release of a key that was swallowed by a hotkey
+		native_hotkey_key = VK_NO_KEY;
+		return;
+	}
+
+	const int code = mac_virtual_to_adb(keycode);
+	if (code < 0)
+		return;
+
+	if (emul_suspended) {
+		if (down) {
+			if (code != 0x31)
+				return;				// no key presses while suspended
+			resume_emulator();		// Space wakes the emulator up
+		} else {
+			// The guest never saw the key press, so release the key to
+			// keep its key state in sync.
+			ADBKeyUp(code);
+			return;
+		}
+	}
+
+	if (down)
+		ADBKeyDown(code);
+	else
+		ADBKeyUp(code);
+}
+
+// Request a complete refresh of the window.
+//
+// The frame buffer (the_buffer/the_buffer_copy) is allocated and freed by the
+// emulation thread in video_open()/video_close() during a guest video-mode
+// change, and it is the redraw thread that owns it. The SDL event handler
+// runs on the main thread, so it must not touch the frame buffer directly —
+// it only raises this flag, and the redraw thread performs the refresh on its
+// next tick (after any mode change has settled).
+//
+// Volatile because it is written on the main thread and read on the redraw
+// thread. Losing a race here (a request being overwritten by the redraw
+// thread's clear) only costs one full refresh, so no lock is needed.
+static volatile bool complete_refresh_requested = false;
+
+static void request_complete_window_refresh()
+{
+	complete_refresh_requested = true;
+}
+
 static void force_complete_window_refresh()
 {
 	if (display_type == DISPLAY_WINDOW) {
@@ -1876,7 +2217,6 @@ static void handle_events(void)
 		for (int i = 0; i < n_events; i++) {
 			SDL_Event const & event = events[i];
 			switch (event.type) {
-
 			// Mouse button
 			case SDL_MOUSEBUTTONDOWN: {
 				unsigned int button = event.button.button;
@@ -1914,11 +2254,19 @@ static void handle_events(void)
 
 			// Mouse moved
 			case SDL_MOUSEMOTION:
-				drv->mouse_moved(event.motion.x, event.motion.y);
+				// Call ADBMouseMoved() directly rather than going through
+				// drv->mouse_moved(): the driver object is created and
+				// destroyed on the emulation thread (video_open()/video_close()
+				// during a guest video-mode change), so dereferencing it from
+				// the main thread's event handler would race with its deletion.
+				// driver_base::mouse_moved() does exactly this call anyway.
+				ADBMouseMoved(event.motion.x, event.motion.y);
 				break;
 
 			// Keyboard
 			case SDL_KEYDOWN: {
+				if (native_keyboard)
+					break;	// Handled by the platform layer
 				int code = -1;
 				if (use_keycodes && !is_modifier_key(event.key)) {
 					if (event2keycode(event.key, true) != -2)	// This is called to process the hotkeys
@@ -1941,12 +2289,14 @@ static void handle_events(void)
 							ctrl_down = true;
 					} else {
 						if (code == 0x31)
-							drv->resume();	// Space wakes us up
+							resume_emulator();	// Space wakes us up
 					}
 				}
 				break;
 			}
 			case SDL_KEYUP: {
+				if (native_keyboard)
+					break;	// Handled by the platform layer
 				int code = -1;
 				if (use_keycodes && !is_modifier_key(event.key)) {
 					if (event2keycode(event.key, false) != -2)	// This is called to process the hotkeys
@@ -1972,7 +2322,7 @@ static void handle_events(void)
 
 			// Hidden parts exposed, force complete refresh of window
 			case SDL_VIDEOEXPOSE:
-				force_complete_window_refresh();
+				request_complete_window_refresh();
 				break;
 
 		// Window "close" widget clicked
@@ -1985,7 +2335,7 @@ static void handle_events(void)
 			case SDL_ACTIVEEVENT:
 				// Force a complete window refresh when activating, to avoid redraw artifacts otherwise.
 				if (event.active.gain)
-					force_complete_window_refresh();
+					request_complete_window_refresh();
 				break;
 			}
 		}
@@ -2338,14 +2688,68 @@ static void VideoRefreshInit(void)
 
 static inline void do_video_refresh(void)
 {
-	// Handle SDL events
-	handle_events();
+	// NOTE: SDL events are deliberately NOT handled here. This runs on the
+	// redraw thread, but SDL events must be pumped and drained on the same
+	// single thread, and that thread has to be the one SDL considers "main"
+	// (the thread that called SDL_SetVideoMode(), which is the real main
+	// thread — see VideoHandleEvents below). Pumping on one thread and
+	// draining on another drops KEYUP events (keys stick/repeat), loses
+	// whole batches of input, and misorders events (wrong characters).
+
+	// Perform a full window refresh if one was requested (by the main
+	// thread's event handler). This has to happen here, on the redraw
+	// thread, because the frame buffer belongs to the redraw thread and is
+	// reallocated by the emulation thread during a video-mode change.
+	if (complete_refresh_requested) {
+		complete_refresh_requested = false;
+		force_complete_window_refresh();
+	}
 
 	// Update display
 	video_refresh();
 
 	// Set new palette if it was changed
 	handle_palette_changes();
+}
+
+// Pump and process SDL events. Must be called on the thread that called
+// SDL_SetVideoMode(), i.e. the main thread. This is driven from the main run
+// loop (see SDLMain.m's pumpSDLEvents:).
+//
+// This deliberately does NOT take sdl_events_lock: switch_to_current_mode()
+// holds that lock across a mode change, and the model change marshals
+// SDL_SetVideoMode onto THIS thread. If we blocked on the lock here we would
+// never get to service that marshalled call, and the emulation thread holding
+// the lock would wait forever — a deadlock. handle_events() only touches the
+// SDL queue (which we alone drain) and the ADB layer (which has its own lock).
+//
+// C linkage because it is called from SDLMain.m, which is Objective-C.
+extern "C" void VideoHandleEvents(void)
+{
+	if (!redraw_thread_active)
+		return;
+
+	// When the platform layer delivers the keyboard input itself, make sure
+	// the SDL 1.2 keyboard events are thrown away instead of queued (they
+	// are unreliable on macOS and would duplicate the native events).
+	static bool sdl_key_events_checked = false;
+	if (!sdl_key_events_checked) {
+		sdl_key_events_checked = true;
+		if (native_keyboard) {
+			SDL_EventState(SDL_KEYDOWN, SDL_IGNORE);
+			SDL_EventState(SDL_KEYUP, SDL_IGNORE);
+		}
+	}
+
+	SDL_PumpEvents();
+	handle_events();
+}
+
+// Tell the video driver that the keyboard is handled by the platform layer
+// (C linkage: called from SDLMain.m, which is Objective-C).
+extern "C" void VideoSetNativeKeyboard(int enable)
+{
+	native_keyboard = (enable != 0);
 }
 
 // This function is called on non-threaded platforms from a timer interrupt
